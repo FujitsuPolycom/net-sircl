@@ -167,8 +167,14 @@ per host, and Tree/PAT connections on paths are not qualified; use Ring.
 Several processes or hosts sending through one relay at once are unsupported.
 The window limits one process's traffic through one local function toward one
 peer, not several senders' combined traffic. All-to-all traffic can overrun
-the forwarding queue. Performance with `NET_SIRCL_RELAXED_ORDERING=0` and
-small-message performance are not characterised.
+the forwarding queue. Small-message performance is not characterised.
+
+Known issue: on one cabled pair, one run in four of the all-gather line under
+CUDA-graph capture (`-G 20`, 8-256 MiB) stopped at its first size with
+`transport retry counter exceeded` on one PCI function, while the receiving
+port counted six ACK timeouts. No relay was involved, and three further runs
+of that line passed. Whether the cause is the cable, the port or the plugin is
+not yet established.
 
 See [testing and CI](docs/testing.md), [release notes](docs/release-0.1.0.md)
 and [source provenance](SOURCE.json). `make help` lists build and test targets.

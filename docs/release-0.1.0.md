@@ -41,8 +41,20 @@ permission checks; log creation does not follow symbolic links. These checks
 prevent unprivileged local users from replacing root-executed marker code or
 redirecting its log writes. See [marker security](../fabric-tool/README.md#marker-security).
 
-Plugin hardware evidence covers a pair, ring of eight and path of four with
-NCCL 2.32.3. Rings and paths use `NCCL_ALGO=Ring`. Paths need relays installed
+Plugin hardware evidence covers a pair, a ring of four, a ring of eight and a
+path of four with NCCL 2.32.3. On a ring of four DGX Sparks every test line
+passed with bus bandwidth 0.99-1.01 of stock NCCL (all-reduce 23.46 against
+23.28 GB/s at 256 MiB); on a path of four through two relays, with fabric-tool's
+path table, every line passed at 17.67 GB/s all-reduce at 256 MiB, where stock
+NCCL alone timed out, and a PyTorch DDP check passed on all four ranks.
+`NET_SIRCL_RELAXED_ORDERING=0` against `=1` measured no difference on a pair
+(ratios 0.98-1.02).
+
+Known issue: on one cabled pair, one run in four of the all-gather line under
+CUDA-graph capture stopped with `transport retry counter exceeded` on one PCI
+function; three further runs passed. The cause is not yet established.
+
+Rings and paths use `NCCL_ALGO=Ring`. Paths need relays installed
 with fabric-tool or an equivalent installer. See [measurements](measurements.md)
 for plugin versus stock NCCL results and limitations.
 
