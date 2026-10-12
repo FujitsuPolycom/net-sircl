@@ -1,0 +1,33 @@
+name: build-and-test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3 libibverbs-dev
+      - name: Build production and emulated libraries
+        run: make -j2 all emu
+      - name: CPU and release tests
+        run: make check check-release
+      - name: NCCL end to end when CUDA is available
+        run: make check-e2e-if-available
+      - name: Package source
+        run: make package
+      - name: Build and test extracted source archive
+        run: |
+          mkdir "$RUNNER_TEMP/net-sircl-source"
+          tar -xzf dist/net-sircl-0.1.0.tar.gz -C "$RUNNER_TEMP/net-sircl-source"
+          make -C "$RUNNER_TEMP/net-sircl-source" -j2 all emu
+          make -C "$RUNNER_TEMP/net-sircl-source" check

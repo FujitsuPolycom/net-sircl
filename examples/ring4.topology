@@ -1,0 +1,4 @@
+# Replace names. Port 0 -> next host's port 1, including last -> first.
+# CPU route tests only: no ring-of-four hardware run yet.
+hosts node-0 node-1 node-2 node-3
+cabling ring

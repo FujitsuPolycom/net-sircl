@@ -1,0 +1,3 @@
+# Replace names with hostname output. One cable: node-0 port 0 -> node-1 port 1.
+hosts node-0 node-1
+cabling path

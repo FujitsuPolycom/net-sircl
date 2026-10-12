@@ -1,0 +1,3 @@
+# Replace names. Port 0 -> next host's port 1, including last -> first.
+hosts node-0 node-1 node-2 node-3 node-4 node-5 node-6 node-7
+cabling ring

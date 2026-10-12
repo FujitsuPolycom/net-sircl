@@ -1,0 +1,12 @@
+**/build/
+**/.core-build/
+**/__pycache__/
+**/.pytest_cache/
+*.so
+*.o
+*.a
+*.d
+*.pyc
+/dist/
+/test-results/
+/scripts/config/site-values.txt

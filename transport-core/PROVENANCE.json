@@ -1,0 +1,11 @@
+{
+  "baseline_libsircl": "947bce1e",
+  "baseline_net_sircl": "7b81b968",
+  "inputs": {
+    "src/transport/shm_verbs.c": "e09b9dd449533f1792f2e4f17dfaf8d41a5a9010f15ef1cb58d98df0c2eb7fed",
+    "src/transport/verbs_dl.c": "164017e58b2eb74e2137b897553e6509a11a4ad7b9c3e1dfc7d83b2585d60387",
+    "src/fabric.c": "99312f2a70db112dc9742421798fc96e1db1bd132cfb0de485c937a5f458a9b5",
+    "include/sircl_fabric.h": "5960d6fe55fba8c8f32a00bf747aecfd3a4b018db8248ce5134f75bd95843ebb"
+  },
+  "nvidia": "Vendored NCCL API headers read; no new NVIDIA implementation adapted."
+}
