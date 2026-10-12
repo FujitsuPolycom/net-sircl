@@ -48,5 +48,47 @@
     "transport-core/tests/test_verbs.c": "ec84a8971e48c2fd098dc06d630733af2a5f21c6cd6e9eaa89dca67a9871c220"
   },
   "upstream_branch": "codex/shared-transport-core",
-  "upstream_commit": "a4de4dd5280f01613889ced7873aa85ccf8dc2bb"
+  "upstream_commit": "a4de4dd5280f01613889ced7873aa85ccf8dc2bb",
+  "fabric_tool": {
+    "upstream_branch": "pi/sircl-fabric-tool",
+    "upstream_commit": "852407bd1f946840debce36a7299d303dfceb8cb",
+    "upstream_directory": "spark_transport/fabric-tool",
+    "version": "0.1.0",
+    "upstream_file_sha256": {
+      "DESIGN.md": "1ed4be386ec685e811dd434b7ab1ba747e39527608d8f72425964864acb36d16",
+      "HARDWARE-TEST-PLAN.md": "a13e58a68aed5407eb747792bb92d3b97efc75683e4cea3065c5d5bc4c531e1e",
+      "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "Makefile": "a9db62ed13dcbad9107f93bb774deb04d718bc632cdc76c4604ad4b62092daf2",
+      "mesh_marker.c": "5f330fba6e4c6c2e49d158b84fd76ef0c2ed710354753742503c09262b9c6d4a",
+      "NOTICE": "2c27bc61484c9b41ac68ce6ed85b2b07d56d4f68c6f403ff6c298dd6475b016b",
+      "README.md": "a7c7b20d4d784c6775f0cd818aa4d13a8ee57af138a2c06bd076f250725c3537",
+      "VERSION": "e9dd8507f4bf0c6f42458e41aea833ad0bd3f6127272335eee9bf4d58541ed67",
+      "fabric_tool/boot.py": "1e91067816241049340a6bf594356c3039a3607ce619d174f5ef5c3cc70a4858",
+      "fabric_tool/cli.py": "2046ccd2e4d47024da6b9070bf02ca74009ab4fbcaf53395466d9b62a70a0ec4",
+      "fabric_tool/commands.py": "066652a769da8907c06d1593386868267f4f433356d6bc624882539cad764371",
+      "fabric_tool/diff.py": "666aec254d57d95b9b8dd4ea20db2385b74c11177da792c4eeac703ac595d57c",
+      "fabric_tool/facts.py": "08011948cb1ce198fdad6b63eaa7ac26fa63cef34844be3ae318d80bc2467ad5",
+      "fabric_tool/model.py": "ad3b2f6488fae840b673ef55de0c3acba7913bacc963654c20f83336b6b959a3",
+      "fabric_tool/ops.py": "e29c1cd5dba9d9ac5f891de71f1c79c0597d9865205efd9b022b22f6b7d34bec",
+      "fabric_tool/plan.py": "a34f87fa8e5bdc5200967edcb1ae0d9723ff8867b4a29f1d56bce094b6c3d62d",
+      "fabric_tool/report.py": "dbe18e859d778e2be048fe2374c3a301e91b0fa446becc3ff3cdbb08d36ad44a",
+      "fabric_tool/state.py": "f135486db3622eee0cc5156a55a8ab1f9bf605c76d320e876c251cdb8f69e226",
+      "fabric_tool/topology.py": "e51d42d36fd0aea02e4eed449fe9e7fbb1e245ef550dd9afd3769474e050fe6a",
+      "fabric_tool/__init__.py": "54b863ba961517c8773de0e76efd73a7565d8f6872991c01e016f962a54fa3cf",
+      "fabric_tool/__main__.py": "307299fda7b77d22c64cb51430ec75e5f59d78e9c948786afb3b2544fe45e4b7",
+      "tests/conftest.py": "40a1adfcc23beb9210489f4325ecfd3a13cf6a532bb8717afe8a85bfda383469",
+      "tests/test_apply.py": "c4d5a3d8b3f7d7fd46118ecfaf4f02ca7b664fb748c4212e61f9f32e034811a8",
+      "tests/test_boot.py": "5b576cf7ce8547d3e1943f800d47ac901c07a0d5c058eab05aca5a4e4214da86",
+      "tests/test_commands.py": "21f97172bfb615e3dfd283bf238642ad0a361cc69172aa580e6a5bfb035413d9",
+      "tests/test_equivalence.py": "f66571da817b4173353e9704f7759ab2d628f76347fd147cfa371c891df43150",
+      "tests/test_facts.py": "7a5efbfce8475f270737f3634880df6212ce187dcef94ef917d53606dd64df2f",
+      "tests/test_plan.py": "c5cbe823c1be869ed36833388455b59cf205d4b1f5b5fff69e4cc80e98e25493",
+      "tests/test_topology.py": "bfefdbd1f961cd4ba76d4e0926f00f45b2c5b312621ac4b35b61fb4a7c780c08"
+    },
+    "local_changes": [
+      "Public documentation and synthetic fixtures use placeholder hosts and documentation addresses.",
+      "Build, test, install and archive integration; standalone documentation links.",
+      "Boot CLI defaults, complete persisted facts, and checked systemd operations with CPU regression tests."
+    ]
+  }
 }

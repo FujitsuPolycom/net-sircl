@@ -99,3 +99,42 @@ test infrastructure, not a simulation of real relay capacity or performance.
 src/verbs_dl.c retains libsircl's runtime-loaded verbs provider.
 tools/adapt_proxy.py creates reviewed core-adapted compilations from pristine,
 hash-checked SIRCL ABI9 proxy source; it does not alter the serving source.
+
+
+Standalone fabric-tool attribution
+==================================
+
+fabric-tool, the relay table of directly cabled DGX Sparks
+Copyright 2026 SparkRing contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Absorbed source
+---------------
+The relay plan's derivation, checks, shell commands, host-state parsing,
+comparison and reports are absorbed from SparkRing's SIRCL relay plan
+installer and route module:
+
+- sparkring_sircl/routes.py      -> fabric_tool/model.py
+- sparkring_sircl/fabric/plan.py -> fabric_tool/plan.py
+- sparkring_sircl/fabric/commands.py -> fabric_tool/commands.py
+- sparkring_sircl/fabric/state.py    -> fabric_tool/state.py
+- sparkring_sircl/fabric/diff.py     -> fabric_tool/diff.py
+- sparkring_sircl/fabric/ops.py      -> fabric_tool/ops.py
+- sparkring_sircl/fabric/report.py   -> fabric_tool/report.py
+- sparkring_sircl/fabric/mesh_marker.c -> mesh_marker.c (unchanged)
+
+as of SparkRing branch codex/shared-transport-core, commit a4de4dd5. The
+tool's layout inputs follow SparkRing's runtime rendering of the same plan
+(runtime/host/relays.py: a whole cycle is one whole-ring group with
+same-function relay egress; a path is a group on a ring one Spark longer,
+with sibling egress). The topology-file format is net-sircl's
+(spark_transport/transport-core/src/topology.c), parsed to the same defaults.
+
+Measured constraints the absorbed derivation encodes (SparkRing's
+measurements on the cycle-of-eight cabling, 2026-10-11): a relay's hairpin
+queue holds 512 KiB, the device maximum, and cannot pause its sender; relay
+egress through the sibling Socket Direct function lowered burst loss to
+0.06 % at 2 MiB; queue pairs use flow label 0; tags are EtherTypes chosen by
+destination address because the sender NIC computes the ICRC after the
+RDMA-TX rewrite.

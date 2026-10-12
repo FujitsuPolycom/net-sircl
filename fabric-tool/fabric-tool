@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Run the sibling source package or the package installed below this prefix."""
+from pathlib import Path
+import sys
+
+directory = Path(__file__).resolve().parent
+package = directory if (directory / "fabric_tool").is_dir() else directory.parent / "lib/fabric-tool"
+sys.path.insert(0, str(package))
+from fabric_tool.cli import main
+
+raise SystemExit(main())

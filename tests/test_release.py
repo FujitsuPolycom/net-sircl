@@ -32,7 +32,10 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(len(names), len(members))
                 for required in ("README.md", "LICENSE", "NOTICE", "Makefile", "SOURCE.json",
                                  "examples/pair.topology", ".github/workflows/ci.yml",
-                                 "net-sircl/nccl/LICENSE.txt", "transport-core/PROVENANCE.json"):
+                                 "net-sircl/nccl/LICENSE.txt", "transport-core/PROVENANCE.json",
+                                 "fabric-tool/LICENSE", "fabric-tool/NOTICE", "fabric-tool/VERSION",
+                                 "fabric-tool/mesh_marker.c", "fabric-tool/fabric_tool/cli.py",
+                                 "fabric-tool/fabric-tool", "fabric-tool/tests/test_equivalence.py"):
                     self.assertIn(required, names)
                 for member in members:
                     self.assertTrue(member.isfile())

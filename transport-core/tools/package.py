@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a standalone net-sircl/core source archive; no build or network action."""
+"""Create a standalone net-sircl/core/fabric-tool archive; no build or network action."""
 import argparse
 import gzip
 from pathlib import Path
@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--include-libsircl", action="store_true")
     args = parser.parse_args()
     trees = {"transport-core": CORE, "net-sircl": TRANSPORT / ("net-sircl" if STANDALONE else "nccl/net-sircl")}
+    trees["fabric-tool"] = TRANSPORT / "fabric-tool"
     if args.include_libsircl:
         trees["libsircl"] = TRANSPORT / "libsircl"
     for root in trees.values():

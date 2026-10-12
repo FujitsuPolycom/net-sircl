@@ -34,10 +34,11 @@ standalone net-sircl repository:
 python3 tools/package.py --output /tmp/net-sircl-core.tar.gz
 ```
 
-The archive has sibling `net-sircl` and `transport-core` directories. From the
+The archive has sibling `net-sircl`, `transport-core` and `fabric-tool` directories. From the
 standalone repository it also includes the root build, documentation, examples,
 CI and release tests; use `make all emu check` at that root. From SparkRing,
-build in `net-sircl` and run `make check` in `transport-core` too. Comparisons
+build in `net-sircl` and `fabric-tool`, and run `make check` in all three. Fabric-tool
+tests require pytest. Comparisons
 with absent SparkRing/libsircl consumers skip. `--include-libsircl` requires
 that optional library source beside the core. No generated binary is included.
 

@@ -31,7 +31,7 @@ On Linux, install a C11 compiler, Make, Python 3 and rdma-core development heade
 For Ubuntu:
 
 ```sh
-sudo apt-get install build-essential python3 libibverbs-dev
+sudo apt-get install build-essential python3 python3-pytest libibverbs-dev
 make -j
 make check
 sudo make install PREFIX=/opt/net-sircl
@@ -42,6 +42,9 @@ The NCCL plugin headers are included; building requires neither CUDA nor an NCCL
 source checkout. Running requires compatible NCCL: **2.32.3 is the tested version**,
 using the v12 network-plugin API. The production library is
 `/opt/net-sircl/lib/libnccl-net-sircl.so`.
+The same install provides `/opt/net-sircl/bin/fabric-tool`. Its Python runtime
+uses only the standard library; pytest is needed for its CPU tests. `make` also
+compiles the relay marker to check the rdma-core build dependencies.
 
 ## Pair quickstart
 
@@ -84,16 +87,55 @@ Position `i`'s port 0 connects to position `i+1`'s port 1. Rings add the last-to
 cable. Paths do not. Set `NCCL_ALGO=Ring`, launch one rank per host in cable order,
 and change `--nnodes` and `--node-rank` accordingly.
 
-**Paths need a relay table before launching NCCL.** Intermediate Sparks must
-forward RoCE v2 frames (flow label 0) to the far peer on the same PCI-function
-class. Endpoints need IP routes through the appropriate functions. This plugin
-does not install that state. SparkRing's fabric installer provides the relay
-table and endpoint routes from its own site description; see
-[fabric setup](docs/fabric.md).
+**Install the relay table before launching NCCL on a path**, or whenever ring
+peers communicate beyond a direct cable. The bundled [fabric-tool](fabric-tool/README.md)
+uses the same topology file to install endpoint routes, ConnectX-7 forwarding
+rules and RDMA transmit markers. No SparkRing Python package is required.
+Interfaces must already have their fabric addresses configured.
 
-**Standalone fabric-tool integration: pending.** This release does not bundle
-that tool. Its installation instructions and verified command examples belong
-in [docs/fabric.md](docs/fabric.md) once it is available.
+From this repository, on a Linux workstation with SSH access to every host:
+
+```sh
+cd fabric-tool
+topology=/absolute/path/to/path4.topology
+python3 -m fabric_tool --topology "$topology"   # default: offline plan
+# Replace names with topology host names and USER@HOST_* with SSH targets.
+fabric() {
+  python3 -m fabric_tool "$@" --topology "$topology" \
+    --ssh node-0=USER@HOST_0 --ssh node-1=USER@HOST_1 \
+    --ssh node-2=USER@HOST_2 --ssh node-3=USER@HOST_3
+}
+fabric facts --output facts.json
+fabric install-marker --scripts                # preview marker build
+fabric install-marker --execute
+fabric apply --facts facts.json                 # preview reconciliation
+fabric apply --facts facts.json --execute
+fabric verify --facts facts.json
+```
+
+Host-changing commands are dry runs unless `--execute` is present. The SSH
+account needs noninteractive sudo; marker builds need the build dependencies
+above on each Spark. Match every topology name to `hostname` and supply every
+host. `verify` must exit zero before launching NCCL.
+
+For boot persistence, install this repository on each Spark and copy the same
+topology and complete `facts.json` there. Run locally on **each Spark**:
+
+```sh
+sudo /opt/net-sircl/bin/fabric-tool install-boot \
+  --topology /etc/net-sircl.topology --facts /absolute/path/to/facts.json
+sudo /opt/net-sircl/bin/fabric-tool install-boot \
+  --topology /etc/net-sircl.topology --facts /absolute/path/to/facts.json --execute
+```
+
+This enables `fabric-table.service`, copies the tool and inputs to persistent
+locations, and applies the table now. The unit restores missing state at boot.
+See [fabric setup](docs/fabric.md) for ownership conflicts, verification and removal.
+
+**Status: equivalence-tested against SparkRing's planner on CPU; hardware test
+pending.** Tests compare routes, filters, marker rules and command strings for
+rings of four/eight and paths of three/four. Earlier plugin hardware measurements
+used SparkRing-installed tables; they do not qualify this installer or its boot unit.
 
 Topology syntax, default function names, overrides and window semantics are in
 [configuration](docs/configuration.md).
@@ -166,11 +208,11 @@ See [measurement conditions and provenance](docs/measurements.md).
 
 ## Tests, packaging and licensing
 
-`make check` runs CPU transport and topology tests. `make check-e2e` runs real
+`make check` runs CPU transport, topology and fabric-tool tests. `make check-e2e` runs real
 NCCL through emulated verbs on one CUDA GPU, in plain and windowed modes.
-`make package` creates `dist/net-sircl-0.1.0.tar.gz` with both source directories
+`make package` creates `dist/net-sircl-0.1.0.tar.gz` with all three source directories
 and this repository's release files. See [testing and CI](docs/testing.md),
 [release notes](docs/release-0.1.0.md) and [source provenance](SOURCE.json).
 
 Apache-2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE), including RoCEnante and
-NVIDIA NCCL attributions. All vendored NVIDIA header notices are retained.
+NVIDIA NCCL and SparkRing fabric-tool attributions. All vendored NVIDIA header notices are retained.
