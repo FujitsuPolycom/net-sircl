@@ -31,6 +31,14 @@ confirm it changes nothing. Execute apply, then run explicit `verify` and
 require exit zero with all hosts and lane routes checked. Save command outputs.
 Also test a relayed IP path bound to its origin interface.
 
+Confirm the marker is root-owned at
+`/usr/local/libexec/fabric-tool/fabric-tool-marker` and matches its adjacent
+`.sha256` file. Record owner and mode for both files and every parent through
+`/`: none may be writable by group or others. Apply the same full parent check
+to `/var/lib/fabric-tool/logs`, and confirm marker logs are written there.
+Generated start scripts must check these properties and the digest before
+launching a marker; security refusals must not start it.
+
 Capture counters before and after each install/verify operation on every fabric
 network device and RDMA function:
 

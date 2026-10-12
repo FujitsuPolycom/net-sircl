@@ -165,6 +165,41 @@ def _adopt_blocker(diff: HostDiff, adopt: bool) -> None:
                             "ownership mark (installed by other tooling); --adopt takes them over")
 
 
+def _marker_blockers(state: HostState, marker: commands.MarkerConfig) -> list[str]:
+    """Why the marker executable must not be started as root on this host, as far as the read shows.
+
+    The script checks the same conditions again right before every start
+    (:func:`.commands.marker_checks`); these blockers stop a run before it
+    changes anything.
+    """
+    if state.marker_binary is None:
+        return [f"the marker executable {marker.path} is missing; build it with `install-marker`"]
+    found = []
+    if state.marker_recorded is None:
+        found.append(f"the marker executable {marker.path} has no digest record {marker.record}; reinstall it "
+                     "with `install-marker`")
+    elif state.marker_recorded != state.marker_binary:
+        found.append(f"the marker executable {marker.path} has sha256 {state.marker_binary}, not the "
+                     f"{state.marker_recorded} recorded in {marker.record} when it was installed; reinstall it "
+                     "with `install-marker`")
+    for path in marker.checked_paths:
+        owner = state.marker_owners.get(path)
+        if owner is None:
+            if path != marker.record or state.marker_recorded is not None:
+                found.append(f"{path} cannot be examined; the marker executable needs it owned by root")
+        elif owner[0] != "root" or owner[1] & 0o022:
+            found.append(f"{path} is owned by {owner[0]} with mode {owner[1]:o}; the marker executable runs as "
+                         "root, so it, its digest record and every directory above them must be owned by root and "
+                         "not writable by group or others")
+    for path in marker.log_dirs:
+        logs = state.marker_owners.get(path)       # a missing directory is created owned by root
+        if logs is not None and (logs[0] != "root" or logs[1] & 0o022):
+            found.append(f"{path} is owned by {logs[0]} with mode {logs[1]:o}; root opens the marker logs in "
+                         f"{marker.log_dir}, so it and every directory above it must be owned by root and not "
+                         "writable by group or others")
+    return found
+
+
 def _marker_changes(diff: HostDiff, script: _Script, state: HostState, host: HostPlan | None,
                     marker: commands.MarkerConfig) -> None:
     handled = set()
@@ -174,15 +209,17 @@ def _marker_changes(diff: HostDiff, script: _Script, state: HostState, host: Hos
         present = [process for process in state.markers if process.device == device]
         handled.update(process.pid for process in present)
         rules_text = " ".join(f"{d}=0x{v:04x}" for d, v in (planned.rules if planned else ()))
+        # A marker started from another executable path is replaced by one started from the checked path.
         if wanted and len(present) == 1 and present[0].rules == wanted and present[0].managed \
-                and present[0].problem is None:
+                and present[0].problem is None and present[0].argv[:1] == (marker.path,):
             diff.changes.append(Change("marker", "keep", device, f"pid {present[0].pid}, {len(wanted)} rules"))
             continue
         for process in present:
             script.marker_stop.extend(commands.marker_stop(marker, process.pid))
         if wanted:
-            script.marker_start.append(commands.marker_start(marker, device, planned.rules if planned else ()))
-            before = "; ".join(process.text() for process in present)
+            script.marker_start.extend(commands.marker_start(marker, device, planned.rules if planned else ()))
+            before = "; ".join(process.text() + ("" if process.argv[:1] == (marker.path,) else
+                                                 f" (executable {process.argv[0]})") for process in present)
             diff.changes.append(Change("marker", "replace" if present else "add", device,
                                        f"{before} -> {rules_text}" if present else rules_text))
         elif present:
@@ -191,8 +228,8 @@ def _marker_changes(diff: HostDiff, script: _Script, state: HostState, host: Hos
         if process.pid not in handled:
             script.marker_stop.extend(commands.marker_stop(marker, process.pid))
             diff.changes.append(Change("marker", "remove", f"pid {process.pid}", process.text()))
-    if script.marker_start and state.marker_binary is None:
-        diff.blockers.append(f"the marker executable {marker.path} is missing; build it with `install-marker`")
+    if script.marker_start:
+        diff.blockers.extend(_marker_blockers(state, marker))
 
 
 def _record(host: HostPlan, plan: GroupPlan, layout_name: str, marker: commands.MarkerConfig,

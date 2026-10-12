@@ -27,6 +27,15 @@ routes, other neighbours, other filters, other qdiscs or other processes. A
 device name outside the fabric's four is refused (:func:`_netdev`), and the
 record of SparkRing's installer (``/run/sparkring-fabric/relay-state.json``)
 is read so the tool can refuse a host whose table SparkRing owns.
+
+The marker executable runs as root. Its path must not lie under a directory
+every user can write (``/tmp``, ``/var/tmp``, ``/dev/shm``); the build script
+installs it owned by root and records its SHA-256 beside it (``<path>.sha256``);
+and every start first checks that the executable, the record and every
+directory above them are owned by root and not writable by group or others,
+and that the executable still has the recorded digest (:func:`marker_checks`).
+Root also opens the marker logs, in a root-owned log directory, without
+following a symbolic link (:func:`log_dir_setup`, :data:`MARKER_LAUNCH`).
 """
 
 from __future__ import annotations
@@ -48,7 +57,19 @@ STATE_DIR = "/run/fabric-table"
 RECORD_PATH = f"{STATE_DIR}/relay-state.json"
 RECORD_SCHEMA = "fabric-table-record/v1"
 SPARKRING_RECORD_PATH = "/run/sparkring-fabric/relay-state.json"
-DEFAULT_MARKER = "/var/tmp/fabric-tool-marker"
+# The marker runs as root, so it lives in a directory only root can write. Its
+# file name keeps the process name ``fabric-tool-mar`` that identifies the
+# tool's marker processes.
+DEFAULT_MARKER = "/usr/local/libexec/fabric-tool/fabric-tool-marker"
+# Directories every local user can write to; a marker path under them is refused.
+SHARED_WRITABLE_DIRS = ("/tmp", "/var/tmp", "/dev/shm")
+# Marker logs are opened by root, so they live in a root-owned directory too.
+DEFAULT_LOG_DIR = "/var/lib/fabric-tool/logs"
+REFUSE_EXIT = 4
+# The root shell that starts a marker: it removes any file at the log path, creates the log
+# with noclobber (O_EXCL), so a symbolic link at the log path is never followed, then
+# execs the marker ($0 is the log, "$@" the marker command line).
+MARKER_LAUNCH = 'rm -f -- "$0" && set -C && exec "$@" < /dev/null > "$0" 2>&1'
 SECTION = "@@"
 HEADER = "set -euo pipefail"
 SETTLE = "sleep 1.5"
@@ -66,12 +87,22 @@ class MarkerConfig:
     """Where the marker executable lives on every host and where each marker logs."""
 
     path: str = DEFAULT_MARKER
-    log_dir: str = "/tmp"
+    log_dir: str = DEFAULT_LOG_DIR
 
     def __post_init__(self) -> None:
         for label, value in (("marker path", self.path), ("marker log directory", self.log_dir)):
             if not _PATH.match(value) or "/../" in f"{value}/":
                 raise FabricError(f"{label} {value!r} must be an absolute path of letters, digits and _./+-")
+        # Root runs the executable and opens the logs, so neither may live where every user can write.
+        for label, value, default in (("marker path", self.path, DEFAULT_MARKER),
+                                      ("marker log directory", self.log_dir, DEFAULT_LOG_DIR)):
+            if value != posixpath.normpath(value) or value.startswith("//"):
+                raise FabricError(f"{label} {value!r} must be a normalized absolute path")
+            for directory in SHARED_WRITABLE_DIRS:
+                if value == directory or value.startswith(directory + "/"):
+                    raise FabricError(f"{label} {value!r} is under {directory}, which every local user can "
+                                      "write; the marker runs as root, so it must be a root-owned location such "
+                                      f"as the default {default}")
 
     @property
     def name(self) -> str:
@@ -81,6 +112,43 @@ class MarkerConfig:
     def comm(self) -> str:
         """The process name the kernel keeps for the executable (its first 15 characters)."""
         return self.name[:15]
+
+    @property
+    def directory(self) -> str:
+        return posixpath.dirname(self.path)
+
+    @property
+    def record(self) -> str:
+        """The digest record: the ``sha256sum`` line of the executable, written when it is installed."""
+        return f"{self.path}.sha256"
+
+    @property
+    def checked_paths(self) -> tuple[str, ...]:
+        """The executable, its digest record and every directory above them up to ``/``.
+
+        All of them must be owned by root and not writable by group or
+        others before the marker starts (:func:`marker_checks`).
+        """
+        paths = [self.path, self.record]
+        directory = self.directory
+        while directory != "/":
+            paths.append(directory)
+            directory = posixpath.dirname(directory)
+        return (*paths, "/")
+
+    @property
+    def log_dirs(self) -> tuple[str, ...]:
+        """The log directory and every directory above it up to ``/``.
+
+        Each that exists must be owned by root and not writable by group or
+        others before a marker starts (:func:`log_dir_setup`).
+        """
+        paths = []
+        directory = self.log_dir
+        while directory != "/":
+            paths.append(directory)
+            directory = posixpath.dirname(directory)
+        return (*paths, "/")
 
     def log(self, device: str) -> str:
         return f"{self.log_dir}/{self.name}-{device}.log"
@@ -134,6 +202,10 @@ def read_script(marker: MarkerConfig) -> str:
         section(f"filters:{netdev}", f"tc -j filter show dev {netdev} ingress 2>/dev/null || true")
     section("markers", f"pgrep -a -x {q(marker.comm)} || true")
     section("marker-binary", f"sha256sum {q(marker.path)} 2>/dev/null || true")
+    section("marker-record", f"head -c 64 {q(marker.record)} 2>/dev/null || true")
+    section("marker-owners", f"stat -c '%U %a %n' -- {' '.join(q(p) for p in marker.checked_paths)} "
+                             f"{' '.join(q(p) for p in marker.log_dirs if p not in marker.checked_paths)} "
+                             "2>/dev/null || true")
     for device in model.RDMA_DEVICES:
         section(f"marker-log:{device}", f"head -c 4096 {q(marker.log(device))} 2>/dev/null || true")
     section("record", f"cat {RECORD_PATH} 2>/dev/null || true")
@@ -214,13 +286,65 @@ def route_del(destination: str, netdev: str, *, protocol: int | None, metric: in
     return command
 
 
-def marker_start(marker: MarkerConfig, device: str, rules: Iterable[tuple[str, int]]) -> str:
-    """Start one managed marker in its own session; it keeps its rules until SIGTERM."""
+def _owner_check(paths: Iterable[str], action: str, *, existing_only: bool = False) -> str:
+    """Stop the script (exit 4) unless every path is owned by root and not writable by group or others.
+
+    ``stat -c '%U %a'`` prints the owner and the octal mode, whose last two
+    digits (group, others) must lack the write bit: 0, 1, 4 or 5. A missing
+    path prints nothing and a symbolic link reports mode 777, so both are
+    refused. ``existing_only`` skips paths that do not exist yet, the
+    directories an install creates.
+    """
+    skip = '[ -e "$f" ] || continue; ' if existing_only else ""
+    requirement = "be owned by root" if existing_only else "exist, be owned by root"
+    return (f"for f in {' '.join(q(path) for path in paths)}; do {skip}"
+            "case \"$(stat -c '%U %a' -- \"$f\" 2>/dev/null)\" in 'root '*[0145][0145]) ;; "
+            f'*) echo "refusing to {action}: $f must {requirement} and not be writable by group '
+            f'or others" >&2; exit {REFUSE_EXIT};; esac; done')
+
+
+def log_dir_setup(marker: MarkerConfig) -> tuple[str, str]:
+    """Refuse a log directory, or any directory above it, that exists but is not root's alone; then
+    create the missing ones owned by root.
+
+    Root opens each log in that directory without following a symbolic link
+    (:data:`MARKER_LAUNCH`), and no other user can replace the directory or
+    any directory above it.
+    """
+    return (_owner_check(marker.log_dirs, "start the marker", existing_only=True),
+            f"sudo -n install -d -o root -g root -m 0755 {q(marker.log_dir)}")
+
+
+def marker_checks(marker: MarkerConfig, action: str = "start the marker") -> tuple[str, str]:
+    """The two checks that precede every start of the marker as root.
+
+    The executable, its digest record and every directory above them must
+    be root's alone, so no other user can replace them between these checks
+    and the start. The executable's SHA-256 must then equal the digest that
+    :func:`marker_build_script` recorded when it installed the executable.
+    Either failure ends the script with exit 4 before anything runs.
+    """
+    refusal = (f"refusing to {action}: {marker.path} differs from the SHA-256 recorded in "
+               f"{marker.record} when it was installed; reinstall the marker")
+    return (_owner_check(marker.checked_paths, action),
+            f"printf '%s  %s\\n' \"$(head -c 64 {q(marker.record)})\" {q(marker.path)} | sha256sum -c --status || "
+            f"{{ echo {q(refusal)} >&2; exit {REFUSE_EXIT}; }}")
+
+
+def marker_start(marker: MarkerConfig, device: str,
+                 rules: Iterable[tuple[str, int]]) -> tuple[str, str, str, str, str]:
+    """The log directory (:func:`log_dir_setup`), the checks of :func:`marker_checks`, then one managed
+    marker started as root in its own session.
+
+    Root's shell opens the log (:data:`MARKER_LAUNCH`) and execs the marker,
+    which keeps the process name and its rules until SIGTERM.
+    """
     rule_words = " ".join(f"--rule {_ipv4(destination)}=0x{int(value):04x}" for destination, value in rules)
     if not rule_words:
         raise FabricError(f"a marker for {device} needs at least one rule")
-    return (f"(sudo -n setsid {q(marker.path)} --device {_device(device)} {rule_words} --managed "
-            f"< /dev/null > {q(marker.log(device))} 2>&1 &)")
+    return (*log_dir_setup(marker), *marker_checks(marker),
+            f"(sudo -n setsid bash -c {q(MARKER_LAUNCH)} {q(marker.log(device))} {q(marker.path)} "
+            f"--device {_device(device)} {rule_words} --managed &)")
 
 
 def marker_stop(marker: MarkerConfig, pid: int) -> tuple[str, str]:
@@ -252,7 +376,13 @@ MARKER_SOURCE_END = "FABRIC_TOOL_MARKER_SOURCE_END"
 
 
 def marker_build_script(hostname: str, marker: MarkerConfig, source: str) -> str:
-    """Compile the marker source on a host (rdma-core headers needed) and install it at the marker path."""
+    """Compile the marker source on a host (rdma-core headers needed) and install it at the marker path.
+
+    The directories that already exist above the marker must be root's alone;
+    the install creates the missing ones and the executable owned by root
+    (mode 0755), writes the digest record and ends with the checks every
+    start runs (:func:`marker_checks`).
+    """
     if any(line.strip() == MARKER_SOURCE_END for line in source.splitlines()):
         raise FabricError("the marker source contains the here-document delimiter")
     return "\n".join([
@@ -264,6 +394,10 @@ def marker_build_script(hostname: str, marker: MarkerConfig, source: str) -> str
         source.rstrip("\n"),
         MARKER_SOURCE_END,
         "cc -O2 -Wall -Wextra \"$work/mesh_marker.c\" -o \"$work/marker\" -libverbs -lmlx5",
-        f"install -m 0755 \"$work/marker\" {q(marker.path)}",
+        _owner_check(marker.checked_paths[2:], "install the marker", existing_only=True),
+        f"sudo -n install -d -o root -g root -m 0755 {q(marker.directory)}",
+        f"sudo -n install -o root -g root -m 0755 \"$work/marker\" {q(marker.path)}",
+        f"sha256sum {q(marker.path)} | sudo -n tee {q(marker.record)} >/dev/null",
+        *marker_checks(marker, "install the marker"),
         f"sha256sum {q(marker.path)}",
     ]) + "\n"

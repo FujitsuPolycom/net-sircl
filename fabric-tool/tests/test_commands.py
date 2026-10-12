@@ -31,9 +31,10 @@ def test_command_forms():
     assert commands.filter_del("enp1s0f0np0", 11) == "sudo -n tc filter del dev enp1s0f0np0 ingress pref 11"
     assert commands.filter_del("enp1s0f0np0", 11, protocol=0x88b5, handle=1) == (
         "sudo -n tc filter del dev enp1s0f0np0 ingress protocol 0x88b5 pref 11 handle 1 flower")
-    assert commands.marker_start(MARKER, "rocep1s0f0", [("192.0.2.10", 0x88b5)]) == (
-        "(sudo -n setsid /var/tmp/fabric-tool-marker --device rocep1s0f0 --rule 192.0.2.10=0x88b5 --managed "
-        "< /dev/null > /tmp/fabric-tool-marker-rocep1s0f0.log 2>&1 &)")
+    assert commands.marker_start(MARKER, "rocep1s0f0", [("192.0.2.10", 0x88b5)])[-1] == (
+        "(sudo -n setsid bash -c 'rm -f -- \"$0\" && set -C && exec \"$@\" < /dev/null > \"$0\" 2>&1' "
+        "/var/lib/fabric-tool/logs/fabric-tool-marker-rocep1s0f0.log /usr/local/libexec/fabric-tool/fabric-tool-marker "
+        "--device rocep1s0f0 --rule 192.0.2.10=0x88b5 --managed &)")
     stop, wait = commands.marker_stop(MARKER, 4100)
     assert stop == '[ "$(cat /proc/4100/comm 2>/dev/null)" != fabric-tool-mar ] || sudo -n kill 4100'
     assert wait.startswith("for i in $(seq 1 50)")
@@ -69,10 +70,76 @@ def test_refusals():
         commands.MarkerConfig("relative/marker")
 
 
-def test_marker_build_script():
+def test_marker_default_path_is_root_owned_and_keeps_the_process_name():
+    assert commands.DEFAULT_MARKER == "/usr/local/libexec/fabric-tool/fabric-tool-marker"
+    assert MARKER.path == commands.DEFAULT_MARKER and MARKER.comm == "fabric-tool-mar"
+    assert MARKER.record == "/usr/local/libexec/fabric-tool/fabric-tool-marker.sha256"
+    assert MARKER.checked_paths == (MARKER.path, MARKER.record, "/usr/local/libexec/fabric-tool",
+                                    "/usr/local/libexec", "/usr/local", "/usr", "/")
+    assert commands.MarkerConfig("/opt/marker").checked_paths == ("/opt/marker", "/opt/marker.sha256", "/opt", "/")
+    assert commands.MarkerConfig("/tmpfiles/marker").path == "/tmpfiles/marker"   # not under /tmp
+    assert MARKER.log_dir == commands.DEFAULT_LOG_DIR == "/var/lib/fabric-tool/logs"
+    assert MARKER.log("rocep1s0f0") == "/var/lib/fabric-tool/logs/fabric-tool-marker-rocep1s0f0.log"
+
+
+@pytest.mark.parametrize("log_dir", ["/tmp", "/var/tmp/logs", "/dev/shm", "//tmp", "/var/log/", "logs"])
+def test_marker_log_directories_in_shared_writable_or_relative_locations_are_refused(log_dir):
+    with pytest.raises(FabricError, match="marker log directory"):
+        commands.MarkerConfig(log_dir=log_dir)
+
+
+@pytest.mark.parametrize("path", ["/tmp/fabric-tool-marker", "/var/tmp/fabric-tool-marker", "/dev/shm/marker",
+                                  "/tmp", "/var/tmp/sub/marker", "//tmp/marker", "/var//tmp/marker",
+                                  "/usr/./marker", "/usr/local/libexec/", "relative/marker", "marker",
+                                  "./marker", "/usr/../tmp/marker"])
+def test_marker_paths_in_shared_writable_or_relative_locations_are_refused(path):
+    with pytest.raises(FabricError, match="marker path"):
+        commands.MarkerConfig(path)
+
+
+def test_every_marker_start_first_checks_ownership_and_digest():
+    log_check, log_dir, owners, digest, start = commands.marker_start(MARKER, "rocep1s0f0", [("192.0.2.10", 0x88b5)])
+    assert MARKER.log_dirs == ("/var/lib/fabric-tool/logs", "/var/lib/fabric-tool", "/var/lib", "/var", "/")
+    assert log_check.startswith("for f in /var/lib/fabric-tool/logs /var/lib/fabric-tool /var/lib /var /; "
+                                'do [ -e "$f" ] || continue; case ')
+    assert "refusing to start the marker: $f must be owned by root and not be writable" in log_check
+    assert log_dir == "sudo -n install -d -o root -g root -m 0755 /var/lib/fabric-tool/logs"
+    assert (log_check, log_dir) == commands.log_dir_setup(MARKER)
+    assert owners.startswith("for f in " + " ".join(MARKER.checked_paths) + "; do case ")
+    assert "\"$(stat -c '%U %a' -- \"$f\" 2>/dev/null)\" in 'root '*[0145][0145]) ;;" in owners
+    assert "refusing to start the marker: $f must exist, be owned by root" in owners and "exit 4;;" in owners
+    assert digest == (f"printf '%s  %s\\n' \"$(head -c 64 {MARKER.record})\" {MARKER.path} | sha256sum -c --status "
+                      f"|| {{ echo 'refusing to start the marker: {MARKER.path} differs from the SHA-256 recorded "
+                      f"in {MARKER.record} when it was installed; reinstall the marker' >&2; exit 4; }}")
+    assert start.startswith(f"(sudo -n setsid bash -c {commands.q(commands.MARKER_LAUNCH)} "
+                            f"{MARKER.log('rocep1s0f0')} {MARKER.path} --device rocep1s0f0 ")
+    assert (owners, digest) == commands.marker_checks(MARKER)
+
+
+def test_marker_build_script_installs_owned_by_root_and_records_the_digest():
     source = "int main(void) { return 0; }\n"
     script = commands.marker_build_script("node-0", MARKER, source)
     assert script.startswith("set -euo pipefail")
-    assert "cc -O2 -Wall -Wextra" in script and "install -m 0755" in script
+    lines = script.splitlines()
+    compile_at = lines.index('cc -O2 -Wall -Wextra "$work/mesh_marker.c" -o "$work/marker" -libverbs -lmlx5')
+    existing, make_dir, install, record, owners, digest, report = lines[compile_at + 1:]
+    assert existing.startswith("for f in /usr/local/libexec/fabric-tool /usr/local/libexec /usr/local /usr /; "
+                               'do [ -e "$f" ] || continue; case ')
+    assert "refusing to install the marker" in existing
+    assert make_dir == "sudo -n install -d -o root -g root -m 0755 /usr/local/libexec/fabric-tool"
+    assert install == f'sudo -n install -o root -g root -m 0755 "$work/marker" {MARKER.path}'
+    assert record == f"sha256sum {MARKER.path} | sudo -n tee {MARKER.record} >/dev/null"
+    assert (owners, digest) == commands.marker_checks(MARKER, "install the marker")
+    assert report == f"sha256sum {MARKER.path}"
+    assert not any(line.startswith("install ") for line in lines)
     with pytest.raises(FabricError, match="here-document"):
         commands.marker_build_script("node-0", MARKER, source + commands.MARKER_SOURCE_END + "\n")
+
+
+def test_read_script_reads_the_digest_record_and_the_owners():
+    script = commands.read_script(MARKER)
+    assert f"head -c 64 {MARKER.record} 2>/dev/null || true" in script
+    assert (f"stat -c '%U %a %n' -- {' '.join(MARKER.checked_paths)} /var/lib/fabric-tool/logs /var/lib/fabric-tool "
+            "/var/lib /var 2>/dev/null || true") in script
+    assert f"head -c 4096 {MARKER.log('rocep1s0f0')} 2>/dev/null || true" in script
+    assert "sudo" not in script

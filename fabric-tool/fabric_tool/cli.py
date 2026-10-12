@@ -80,7 +80,7 @@ def _install_scripts(plan, marker: commands.MarkerConfig) -> dict[int, str]:
         lines.extend(commands.route_replace(route.destination, route.netdev, route.source)
                      for route in host.routes)
         for rules in host.markers:
-            lines.append(commands.marker_start(marker, rules.device, rules.rules))
+            lines.extend(commands.marker_start(marker, rules.device, rules.rules))
         lines.append(commands.SETTLE)
         scripts[host.position] = "\n".join(lines) + "\n"
     return scripts
@@ -254,9 +254,12 @@ def _command_marker(args: argparse.Namespace, topology: topology_mod.Topology,
     marker = commands.MarkerConfig(args.marker)
     states = ops.gather(hosts, sorted(hosts), executor, marker)
     print(_marker_status(states, marker))
-    targets = [p for p in sorted(hosts) if states[p].reachable and (args.rebuild or states[p].marker_binary is None)]
+    # A missing executable, or one without the digest its install recorded, is (re)built.
+    targets = [p for p in sorted(hosts) if states[p].reachable
+               and (args.rebuild or states[p].marker_binary is None
+                    or states[p].marker_recorded != states[p].marker_binary)]
     if not targets:
-        print("every reachable host has the marker executable")
+        print("every reachable host has the marker executable with the digest its install recorded")
         return 0 if all(states[p].reachable for p in hosts) else 1
     source = _marker_source()
     scripts = {p: commands.marker_build_script(hosts[p].name, marker, source) for p in targets}
@@ -282,6 +285,10 @@ def _marker_status(states, marker: commands.MarkerConfig) -> str:
             lines.append(f"{state.name}: unreachable: {state.error}")
             continue
         status = f"sha256 {state.marker_binary}" if state.marker_binary else "missing"
+        if state.marker_binary and state.marker_recorded is None:
+            status += f", no digest record {marker.record}"
+        elif state.marker_binary and state.marker_recorded != state.marker_binary:
+            status += f", differs from the sha256 {state.marker_recorded} recorded at install"
         running = ", ".join(f"{p.device} pid {p.pid}" for p in state.markers) or "no marker running"
         lines.append(f"{state.name}: {marker.path} {status}; {running}")
     return "\n".join(lines)

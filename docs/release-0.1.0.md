@@ -10,6 +10,16 @@ CPU tests and single-GPU NCCL emulation tests. fabric-tool configures relays,
 sender routes and packet markers, and provides a boot restoration unit. Its
 status is implemented, CPU-tested, research-only; it has not run on a DGX Spark.
 
+The relay marker installs root-owned at
+`/usr/local/libexec/fabric-tool/fabric-tool-marker` with an adjacent SHA-256
+record. Before every start, the executable, digest record and every parent
+directory through `/` must be root-owned and not writable by group or others,
+and the executable must match the recorded digest. Logs use
+`/var/lib/fabric-tool/logs` with the same full parent-directory ownership and
+permission checks; log creation does not follow symbolic links. These checks
+prevent unprivileged local users from replacing root-executed marker code or
+redirecting its log writes. See [marker security](../fabric-tool/README.md#marker-security).
+
 Plugin hardware evidence covers a pair, ring of eight and path of four with
 NCCL 2.32.3. Rings and paths use `NCCL_ALGO=Ring`. Paths need relays installed
 with fabric-tool or an equivalent installer. See [measurements](measurements.md)

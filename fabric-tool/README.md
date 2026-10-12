@@ -8,8 +8,9 @@ Version **0.1.0**, Apache-2.0; derived from the SparkRing project, see
 [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 Status: implemented and CPU-tested, research-only; not run on hardware.
-Standalone tests cover planning, facts, command forms, boot previews and mocked
-boot operations. They do not prove real NIC forwarding or reboot restoration.
+Standalone tests cover planning, facts, command forms, marker security checks,
+boot previews and mocked boot operations. They do not prove real NIC forwarding
+or reboot restoration.
 
 ## Run
 
@@ -41,7 +42,7 @@ The installed copy of that guide is under `share/doc/net-sircl/`.
 | `apply` | Preview reconciliation; `--execute` applies; `--boot` restores without removing objects |
 | `verify` | Read and compare objects and resolve lane destinations with `ip route get`; zero means success |
 | `status` | Show owned and unowned objects |
-| `install-marker` | Preview/build `mesh_marker.c` on hosts, default binary `/var/tmp/fabric-tool-marker` |
+| `install-marker` | Preview/build `mesh_marker.c` on hosts, install root-owned at `/usr/local/libexec/fabric-tool/fabric-tool-marker` and record its SHA-256 |
 | `remove` | Preview/remove owned relay objects |
 | `install-boot` | Locally install `fabric-table.service`, tool copy and inputs, enable restoration and apply now |
 | `remove-boot` | Locally disable/remove the unit and inputs; leave live table and tool copy |
@@ -56,6 +57,26 @@ Exit codes: 0 success; 1 failed reads or remaining changes; 2 invalid input;
 3 blockers. The tool refuses foreign ownership, contradictory facts, cabling
 mismatch and non-relay routes to planned destinations. A failure during execution
 may leave partial state; inspect and reconcile before using the table.
+
+## Marker security
+
+The marker runs as root. Before every start, the tool requires its executable,
+its adjacent `.sha256` file and every parent directory through `/` to be owned
+by root and not writable by group or others. It also requires the executable
+to match the SHA-256 recorded at installation. These checks prevent an
+unprivileged local user from replacing the code that root starts.
+
+Logs live under `/var/lib/fabric-tool/logs`. Every existing directory from
+there through `/` must also be root-owned and not writable by group or others;
+missing directories are created as root. Root creates each log without following
+a symbolic link. Custom `--marker` paths require the same protections;
+paths under `/tmp`, `/var/tmp` and `/dev/shm` are refused.
+
+`apply` reports observed security failures as blockers before making changes.
+Generated host scripts repeat the checks at each start and exit 4 on failure.
+Use `install-marker --execute` to install a missing marker or digest record;
+use `--rebuild` to request a rebuild. The digest checks the installed file's
+integrity against its local record; it is not a signature of trusted source.
 
 See [DESIGN.md](DESIGN.md) for derivation and ownership, and
 [HARDWARE-TEST-PLAN.md](HARDWARE-TEST-PLAN.md) for the hardware procedure; the tool has not run on hardware.

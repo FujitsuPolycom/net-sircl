@@ -1,13 +1,12 @@
 # net-sircl
 
-net-sircl is for people running NVIDIA NCCL applications across two or more
-NVIDIA DGX Sparks connected directly by QSFP cables, without a network switch.
+net-sircl is the Switchless Inference RDMA Collective Layer (SIRCL) for
+NVIDIA NCCL applications. For you, that means running across two or more
+NVIDIA DGX Sparks cabled directly to each other, with no network switch.
 It supplies RDMA connections through NCCL's network-plugin (`ext-net`) interface.
 NCCL keeps its collective algorithms and CUDA-graph support. PyTorch and other
 NCCL users can load the plugin without a framework patch.
 
-The name comes from SIRCL, a library for collective communication over RDMA in
-the SparkRing project, where this transport was developed.
 Version **0.1.0**, connection protocol (wire version) **2**: every host in a job
 must use a plugin with the same wire version.
 

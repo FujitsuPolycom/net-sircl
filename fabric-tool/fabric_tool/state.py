@@ -7,7 +7,9 @@ the host name, the iproute2 versions, ``ip -j addr show``, the network device
 of each RDMA device, ``ip -j -d route show table main``,
 ``ip -j neigh show nud permanent``, ``tc -j qdisc show`` and
 ``tc -j filter show ... ingress`` of the four fabric network devices, the
-marker processes (``pgrep -a -x``), the marker executable's SHA-256, the head
+marker processes (``pgrep -a -x``), the marker executable's SHA-256, the
+digest its install recorded, the owner and mode of the executable, that
+record and every directory above them, the head
 of every marker log, the tool's record and SparkRing's installer record.
 :func:`parse` turns them into a :class:`HostState`.
 
@@ -370,6 +372,16 @@ def parse_filters(text: str, problems: list[str], netdev: str) -> list[FilterEnt
     return found
 
 
+def parse_owners(text: str) -> dict[str, tuple[str, int]]:
+    """``stat -c '%U %a %n'`` lines as {path: (owner, mode)}; a missing path prints no line."""
+    found = {}
+    for line in text.splitlines():
+        words = line.split(" ", 2)
+        if len(words) == 3 and words[1] and set(words[1]) <= set("01234567"):
+            found[words[2]] = (words[0], int(words[1], 8))
+    return found
+
+
 def parse_markers(text: str) -> list[MarkerProcess]:
     found = []
     for line in text.splitlines():
@@ -421,6 +433,8 @@ class HostState:
     filters: dict[str, list[FilterEntry]] = dataclasses.field(default_factory=dict)
     markers: list[MarkerProcess] = dataclasses.field(default_factory=list)
     marker_binary: str | None = None
+    marker_recorded: str | None = None
+    marker_owners: dict[str, tuple[str, int]] = dataclasses.field(default_factory=dict)
     marker_logs: dict[str, dict | None] = dataclasses.field(default_factory=dict)
     record: dict | None = None
     record_problem: str | None = None
@@ -560,6 +574,9 @@ def parse(position: int, name: str, ssh: str, *, returncode: int, stdout: str, s
     state.markers = parse_markers(raw.get("markers", ""))
     binary = raw.get("marker-binary", "").split()
     state.marker_binary = binary[0] if binary and len(binary[0]) == 64 else None
+    recorded = raw.get("marker-record", "").strip()
+    state.marker_recorded = recorded if len(recorded) == 64 and set(recorded) <= set("0123456789abcdef") else None
+    state.marker_owners = parse_owners(raw.get("marker-owners", ""))
     for device in model.RDMA_DEVICES:
         text = raw.get(f"marker-log:{device}", "").strip()
         first = text.splitlines()[0] if text else ""

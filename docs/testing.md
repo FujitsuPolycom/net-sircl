@@ -20,8 +20,10 @@ test plugin. `make check` runs:
   teardown, peer-loss and deadline tests, fixed topology expectations and
   the real-NIC library's v12 export check. That export check needs rdma-core
   headers and `nm`; CI installs both.
-- fabric-tool: 26 standalone pytest cases for topology, plans, facts, exact
-  command forms, boot previews and mocked boot operations. No external
+- fabric-tool: standalone pytest cases for topology, plans, facts, exact
+  command forms, marker ownership/digest and log-parent refusals, boot previews
+  and mocked boot operations. Security tests use synthetic host observations
+  and local Bash checks without privileged host changes. No external
   checkout or full-network simulator is used. These do not exercise real
   apply/verify/remove across hosts or restoration after an actual reboot.
 - Release contracts: measured C/header hashes, example routes, embedded core

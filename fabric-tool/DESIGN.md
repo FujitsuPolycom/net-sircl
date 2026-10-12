@@ -41,3 +41,22 @@ qualification. The tool is implemented and CPU-tested, research-only, and has
 not run on hardware. Standalone tests cover planning, facts, command forms,
 boot previews and mocked boot operations; full-network simulation and
 comparison tests that require another project are not distributed.
+
+## Privileged marker execution
+
+`install-marker` compiles the bundled source, checks every existing parent of
+the destination through `/`, installs the executable root-owned under
+`/usr/local/libexec/fabric-tool`, and writes its SHA-256 to an adjacent record.
+`state.py` reads the digest and ownership observations; `diff.py` blocks apply
+when the executable, record or parents are missing, not root-owned, writable
+by group or others, or the digest differs. A running marker from another
+executable path is replaced during ordinary apply.
+
+`commands.marker_start` repeats the executable and full parent checks before
+each launch, including starts from offline scripts and boot restoration.
+`log_dir_setup` checks every existing directory from
+`/var/lib/fabric-tool/logs` through `/`, then creates missing directories as
+root. The launch shell removes the old log entry and creates a new file with
+noclobber, so a log symlink is not followed. Failed security checks exit the
+host script with status 4. The local digest record detects changes since
+installation; it does not authenticate the source or protect against root.

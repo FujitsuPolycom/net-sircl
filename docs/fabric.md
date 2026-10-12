@@ -88,6 +88,18 @@ See the [hardware procedure](../fabric-tool/HARDWARE-TEST-PLAN.md) for all count
 
 ## Ownership
 
+The marker runs as root from
+`/usr/local/libexec/fabric-tool/fabric-tool-marker`. Installation records its
+SHA-256 in the adjacent `.sha256` file. Before every start, the executable,
+record and every parent directory through `/` must be root-owned and not
+writable by group or others, and the executable must match the digest.
+Logs are created without following symbolic links under
+`/var/lib/fabric-tool/logs`; every existing parent through `/` must pass the
+same ownership and permission checks. An unprivileged user cannot replace
+the marker or redirect root's log writes through writable parent directories.
+See [marker security](../fabric-tool/README.md#marker-security) for custom paths
+and refusal handling.
+
 fabric-tool marks installed IP routes and neighbour entries with protocol 82,
 and forwarding filters with `tc` ingress preferences 11Ã¢â‚¬â€œ17. Its ownership
 record is `/run/fabric-table/relay-state.json`. `remove` targets marked objects,
