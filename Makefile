@@ -20,9 +20,13 @@ install:
 	$(MAKE) -C net-sircl install PREFIX=$(PREFIX) DESTDIR=$(DESTDIR)
 	install -m 0644 README.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/README.md
 	install -m 0644 NOTICE $(DESTDIR)$(PREFIX)/share/doc/net-sircl/NOTICE
+	install -m 0644 SOURCE.json $(DESTDIR)$(PREFIX)/share/doc/net-sircl/SOURCE.json
 	install -d $(DESTDIR)$(PREFIX)/share/doc/net-sircl/docs $(DESTDIR)$(PREFIX)/share/net-sircl/examples
 	install -m 0644 docs/*.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/docs/
 	install -m 0644 examples/* $(DESTDIR)$(PREFIX)/share/net-sircl/examples/
+	install -d $(DESTDIR)$(PREFIX)/share/doc/net-sircl/examples
+	install -m 0644 examples/* $(DESTDIR)$(PREFIX)/share/doc/net-sircl/examples/
+	install -D -m 0644 net-sircl/tests/emulation/nccl_e2e.py $(DESTDIR)$(PREFIX)/share/doc/net-sircl/net-sircl/tests/emulation/nccl_e2e.py
 package:
 	$(PYTHON) transport-core/tools/package.py --output dist/net-sircl-$(VERSION).tar.gz
 check-release:

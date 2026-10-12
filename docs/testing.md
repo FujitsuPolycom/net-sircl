@@ -21,7 +21,7 @@ plugin symbol test to skip; CI installs it and builds the real library first.
 ## NCCL end to end on one GPU
 
 Use a CUDA-capable PyTorch environment with runtime NCCL 2.32.3. The workstation
-validation used PyTorch 2.11.0+cu130 and a prebuilt unpatched NCCL 2.32.3 library
+validation used PyTorch 2.10.0+cu128 and a prebuilt unpatched NCCL 2.32.3 library
 through `LD_PRELOAD`. If supplying a separate compatible NCCL library:
 
 ```sh
