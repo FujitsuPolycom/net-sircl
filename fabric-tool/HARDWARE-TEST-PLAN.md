@@ -1,7 +1,12 @@
 # Hardware validation of the standalone fabric tool
 
-Status: not run. This procedure qualifies fabric-tool on two rings of four
-DGX Sparks. CPU tests do not qualify real forwarding or boot restoration.
+Status: the ring/path table exercise ran on one ring of four DGX Sparks
+with an earlier revision: both tables were installed and verified, plugin test
+arms passed on the path table, the tool's table was removed, and SparkRing's
+table was restored. Two script defects were fixed afterwards on CPU; the fixed
+version has not yet been rerun on hardware. See `docs/release-0.1.0.md` in the
+repository for details. Boot restoration and the full two-ring procedure below
+remain unqualified. CPU tests do not qualify real forwarding or boot restoration.
 
 Use placeholders `node-0` through `node-3` for one ring and `node-4` through
 `node-7` for the other. Substitute actual host names and SSH targets privately.
@@ -28,7 +33,10 @@ For its path test, describe the same ordered hosts with `cabling path`.
 Follow `docs/fabric.md` with this ring's topology.
 Read facts from all four hosts. Preview and install the marker. Preview apply;
 confirm it changes nothing. Execute apply, then run explicit `verify` and
-require exit zero with all hosts and lane routes checked. Save command outputs.
+require exit zero with all hosts and lane routes checked, without a host
+reaching the 180-second SSH timeout. `status` must show each host's digest
+record and marker directories. Confirm the marker remains running after the
+SSH command exits. Save command outputs.
 Also test a relayed IP path bound to its origin interface.
 
 Confirm the marker is root-owned at

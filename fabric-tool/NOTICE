@@ -4,5 +4,5 @@ Licensed under the Apache License, Version 2.0. See LICENSE.
 
 Relay planning, host-state parsing, command generation and reporting derive
 from the SparkRing project's relay installer, revision
-760413a807c3ef8b833a7e9932905006d94228ba. mesh_marker.c retains that source's
+47de221a3cb94a99a2a1356fb61fa123d5047ac7. mesh_marker.c retains that source's
 bytes. SOURCE.json at the repository root records source provenance.

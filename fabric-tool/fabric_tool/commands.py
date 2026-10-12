@@ -71,6 +71,9 @@ REFUSE_EXIT = 4
 # execs the marker ($0 is the log, "$@" the marker command line).
 MARKER_LAUNCH = 'rm -f -- "$0" && set -C && exec "$@" < /dev/null > "$0" 2>&1'
 SECTION = "@@"
+# Ends every section of a read script with a newline, so the next ``@@`` header starts its own
+# line even after output without one (``head -c 64`` of the digest record prints none).
+SECTION_END = "echo"
 HEADER = "set -euo pipefail"
 SETTLE = "sleep 1.5"
 _PATH = re.compile(r"^/[A-Za-z0-9_./+-]+$")
@@ -189,6 +192,7 @@ def read_script(marker: MarkerConfig) -> str:
     def section(name: str, *commands: str) -> None:
         lines.append(f"echo {SECTION}{name}")
         lines.extend(commands)
+        lines.append(SECTION_END)
 
     section("hostname", "hostname")
     section("versions", "ip -V 2>&1 || true", "tc -V 2>&1 || true")
@@ -222,7 +226,7 @@ def route_get_script(destinations: Iterable[str]) -> str:
     lines = ["set -u"]
     for destination in destinations:
         address = _ipv4(destination)
-        lines += [f"echo {SECTION}route:{address}", f"ip -o route get {address} 2>&1 || true"]
+        lines += [f"echo {SECTION}route:{address}", f"ip -o route get {address} 2>&1 || true", SECTION_END]
     lines.append(f"echo {SECTION}end")
     return "\n".join(lines) + "\n"
 
@@ -336,15 +340,20 @@ def marker_start(marker: MarkerConfig, device: str,
     """The log directory (:func:`log_dir_setup`), the checks of :func:`marker_checks`, then one managed
     marker started as root in its own session.
 
-    Root's shell opens the log (:data:`MARKER_LAUNCH`) and execs the marker,
-    which keeps the process name and its rules until SIGTERM.
+    ``setsid -f`` forks the session and returns at once, so ``sudo`` exits and
+    the start command ends; root's shell opens the log (:data:`MARKER_LAUNCH`)
+    and execs the marker with stdin from ``/dev/null`` and stdout and stderr on
+    the log. No process keeps the descriptors of the script's caller (an SSH
+    session waits until every holder of its stdout and stderr exits). The
+    marker keeps its process name, its command line and its rules until
+    SIGTERM.
     """
     rule_words = " ".join(f"--rule {_ipv4(destination)}=0x{int(value):04x}" for destination, value in rules)
     if not rule_words:
         raise FabricError(f"a marker for {device} needs at least one rule")
     return (*log_dir_setup(marker), *marker_checks(marker),
-            f"(sudo -n setsid bash -c {q(MARKER_LAUNCH)} {q(marker.log(device))} {q(marker.path)} "
-            f"--device {_device(device)} {rule_words} --managed &)")
+            f"sudo -n setsid -f bash -c {q(MARKER_LAUNCH)} {q(marker.log(device))} {q(marker.path)} "
+            f"--device {_device(device)} {rule_words} --managed < /dev/null")
 
 
 def marker_stop(marker: MarkerConfig, pid: int) -> tuple[str, str]:

@@ -126,8 +126,10 @@ not predictions for this matched-control procedure.
 
 ## Unmeasured conditions
 
-No ring-of-four hardware run or measurement with relaxed ordering disabled.
+No ring-of-four plugin traffic measurement or measurement with relaxed ordering disabled.
 No serving performance or combined multi-sender relay qualification. CPU tests
 and shared-memory emulation do not establish physical forwarding, real NIC
-loss recovery, reboot restoration or NIC performance. fabric-tool has not run
-on hardware. The 0.1.0 binary has not run on hardware.
+loss recovery, reboot restoration or NIC performance. The separate fabric-tool
+ring/path table exercise and its CPU-only follow-up fixes are scoped in the
+[release notes](release-0.1.0.md); they add no throughput measurements here.
+The 0.1.0 plugin binary has not run on hardware.

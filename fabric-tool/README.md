@@ -7,7 +7,10 @@ of relays to cross. It reads net-sircl's topology file.
 Version **0.1.0**, Apache-2.0; derived from the SparkRing project, see
 [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-Status: implemented and CPU-tested, research-only; not run on hardware.
+Status: research-only. An earlier revision installed and verified ring and
+path tables on four DGX Sparks; plugin test arms passed on the path table.
+The two script fixes included here are CPU-tested and have not yet been rerun
+on hardware. See the repository's `docs/release-0.1.0.md` for the run's scope.
 Standalone tests cover planning, facts, command forms, marker security checks,
 boot previews and mocked boot operations. They do not prove real NIC forwarding
 or reboot restoration.
@@ -15,7 +18,8 @@ or reboot restoration.
 ## Run
 
 From this directory, Python 3.10 or later runs the tool with only its standard
-library. Linux hosts need iproute2, rdma-core, Bash and noninteractive sudo;
+library. Linux hosts need iproute2, rdma-core, Bash, util-linux `setsid` with
+`-f` support and noninteractive sudo;
 SSH operation also needs OpenSSH. Building the marker needs a C compiler,
 libibverbs and libmlx5 development headers (Ubuntu: `libibverbs-dev`, which also provides mlx5 headers).
 
@@ -79,4 +83,17 @@ use `--rebuild` to request a rebuild. The digest checks the installed file's
 integrity against its local record; it is not a signature of trusted source.
 
 See [DESIGN.md](DESIGN.md) for derivation and ownership, and
-[HARDWARE-TEST-PLAN.md](HARDWARE-TEST-PLAN.md) for the hardware procedure; the tool has not run on hardware.
+[HARDWARE-TEST-PLAN.md](HARDWARE-TEST-PLAN.md) for the hardware procedure.
+
+## Script lifecycle
+
+Every read-script section ends with a newline. A digest record without its own
+trailing newline therefore cannot hide the next header or its ownership data.
+This also applies to the sections used to verify IP routes.
+
+Markers start through foreground `sudo -n setsid -f bash -c '<launch>'` with
+stdin from `/dev/null`. `setsid -f` forks a new session and returns, allowing
+sudo and the SSH script to finish while the marker runs. Root creates the log
+and directs the marker's stdout and stderr to it. The marker keeps its process
+name and command line so status and removal can still identify it. A failure
+of sudo or setsid stops the host script; apply then rereads and verifies state.

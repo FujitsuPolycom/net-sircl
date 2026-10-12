@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import time
+
 import pytest
 
-from fabric_tool import commands, model, plan as plan_mod
+from fabric_tool import commands, model, plan as plan_mod, state
 from fabric_tool.model import FabricError
 
 MARKER = commands.MarkerConfig()
@@ -32,9 +36,9 @@ def test_command_forms():
     assert commands.filter_del("enp1s0f0np0", 11, protocol=0x88b5, handle=1) == (
         "sudo -n tc filter del dev enp1s0f0np0 ingress protocol 0x88b5 pref 11 handle 1 flower")
     assert commands.marker_start(MARKER, "rocep1s0f0", [("192.0.2.10", 0x88b5)])[-1] == (
-        "(sudo -n setsid bash -c 'rm -f -- \"$0\" && set -C && exec \"$@\" < /dev/null > \"$0\" 2>&1' "
+        "sudo -n setsid -f bash -c 'rm -f -- \"$0\" && set -C && exec \"$@\" < /dev/null > \"$0\" 2>&1' "
         "/var/lib/fabric-tool/logs/fabric-tool-marker-rocep1s0f0.log /usr/local/libexec/fabric-tool/fabric-tool-marker "
-        "--device rocep1s0f0 --rule 192.0.2.10=0x88b5 --managed &)")
+        "--device rocep1s0f0 --rule 192.0.2.10=0x88b5 --managed < /dev/null")
     stop, wait = commands.marker_stop(MARKER, 4100)
     assert stop == '[ "$(cat /proc/4100/comm 2>/dev/null)" != fabric-tool-mar ] || sudo -n kill 4100'
     assert wait.startswith("for i in $(seq 1 50)")
@@ -111,7 +115,7 @@ def test_every_marker_start_first_checks_ownership_and_digest():
     assert digest == (f"printf '%s  %s\\n' \"$(head -c 64 {MARKER.record})\" {MARKER.path} | sha256sum -c --status "
                       f"|| {{ echo 'refusing to start the marker: {MARKER.path} differs from the SHA-256 recorded "
                       f"in {MARKER.record} when it was installed; reinstall the marker' >&2; exit 4; }}")
-    assert start.startswith(f"(sudo -n setsid bash -c {commands.q(commands.MARKER_LAUNCH)} "
+    assert start.startswith(f"sudo -n setsid -f bash -c {commands.q(commands.MARKER_LAUNCH)} "
                             f"{MARKER.log('rocep1s0f0')} {MARKER.path} --device rocep1s0f0 ")
     assert (owners, digest) == commands.marker_checks(MARKER)
 
@@ -136,6 +140,13 @@ def test_marker_build_script_installs_owned_by_root_and_records_the_digest():
         commands.marker_build_script("node-0", MARKER, source + commands.MARKER_SOURCE_END + "\n")
 
 
+def test_every_read_section_ends_with_a_newline():
+    for script in (commands.read_script(MARKER), commands.route_get_script(["192.0.2.10", "192.0.2.11"])):
+        lines = script.splitlines()
+        headers = [index for index, line in enumerate(lines) if line.startswith(f"echo {commands.SECTION}")]
+        assert all(lines[index - 1] == commands.SECTION_END for index in headers[1:])
+
+
 def test_read_script_reads_the_digest_record_and_the_owners():
     script = commands.read_script(MARKER)
     assert f"head -c 64 {MARKER.record} 2>/dev/null || true" in script
@@ -143,3 +154,59 @@ def test_read_script_reads_the_digest_record_and_the_owners():
             "/var/lib /var 2>/dev/null || true") in script
     assert f"head -c 4096 {MARKER.log('rocep1s0f0')} 2>/dev/null || true" in script
     assert "sudo" not in script
+
+
+# -- the generated scripts under a real bash ---------------------------------------------------------------------
+
+DIGEST = "ab" * 32
+# Host commands as functions: the digest record holds 64 characters and no newline, as `install` writes it
+# through `sha256sum ... | tee` and `head -c 64` reads it back.
+READ_STUBS = f"""
+hostname() {{ echo node-0; }}
+ip() {{ echo '[]'; }}
+tc() {{ echo '[]'; }}
+ls() {{ :; }}
+pgrep() {{ return 1; }}
+sha256sum() {{ echo "{DIGEST}  $1"; }}
+head() {{ [ "$3" = {MARKER.record} ] && printf %s {DIGEST}; return 0; }}
+stat() {{ shift 3; for p; do echo "root 755 $p"; done; }}
+cat() {{ :; }}
+"""
+
+
+def test_a_read_section_without_a_trailing_newline_keeps_the_next_header():
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash on this host")
+    script = READ_STUBS + commands.read_script(MARKER)
+    result = subprocess.run([bash, "-s"], input=script.encode("utf-8"), capture_output=True)
+    stdout = result.stdout.decode("utf-8")
+    assert f"{DIGEST}\n" in stdout and f"{DIGEST}@@" not in stdout
+    parsed = state.parse(0, "node-0", "operator@example.invalid", returncode=result.returncode, stdout=stdout, stderr="")
+    assert parsed.marker_binary == parsed.marker_recorded == DIGEST
+    assert set(parsed.marker_owners) == set(MARKER.checked_paths) | set(MARKER.log_dirs)
+
+
+def test_the_marker_start_leaves_no_descriptor_of_the_caller_open(tmp_path):
+    """The start command returns while the marker runs: nothing holds the caller's stdout or stderr.
+
+    An SSH session ends only when every holder of its stdout and stderr has
+    exited, so a marker (or a sudo waiting for it) that kept them would hold
+    the apply script open. ``sudo`` runs its command and waits for it, as the
+    real one does; ``setsid -f`` forks and returns. The marker is ``sleep``.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash on this host")
+    start = commands.marker_start(MARKER, "rocep1s0f0", [("192.0.2.10", 0x88b5)])[-1]
+    log = (tmp_path / "marker.log").as_posix()
+    marker_words = f"{MARKER.log('rocep1s0f0')} {MARKER.path} --device rocep1s0f0 --rule 192.0.2.10=0x88b5 --managed"
+    assert marker_words in start
+    stubs = ('sudo() { [ "$1" = -n ] && shift; "$@"; }\n'
+             'setsid() { if [ "$1" = -f ]; then shift; "$@" & else "$@"; fi; }\n')
+    script = stubs + start.replace(marker_words, f"{log} sleep 4") + "\necho started\n"
+    began = time.monotonic()
+    result = subprocess.run([bash, "-c", script], capture_output=True, timeout=30)
+    elapsed = time.monotonic() - began
+    assert result.stdout.decode().strip() == "started" and not result.stderr
+    assert elapsed < 3, f"the caller's output stayed open for {elapsed:.1f} s"

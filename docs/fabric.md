@@ -71,7 +71,10 @@ An executing apply rereads and verifies changed hosts. Always run `verify`
 afterward, even if apply reports nothing to change. Identity mismatches,
 contradictory facts, cabling mismatches and foreign ownership block changes.
 A failure during execution can leave partial state: inspect `status` and
-resolve the cause before using the relays.
+resolve the cause before using the relays. Read sections end with a newline
+so digest records cannot hide following ownership observations. Marker starts
+use util-linux `setsid -f` with stdin from `/dev/null` and stdout and stderr on
+the root-created log, allowing the SSH command to finish while markers run.
 
 For a manual route check on a sending host, substitute a far function's IPv4
 address and the local sending function's address:
@@ -140,10 +143,13 @@ relays and the tool copy; use `remove` for live relays.
 
 ## Validation boundary
 
-Status: implemented, CPU-tested, research-only; not run on hardware. Standalone
-tests cover planning, facts, command forms, boot previews and mocked boot
-operations. They do not simulate an entire network or prove forwarding and
-reboot restoration. See [testing and CI](testing.md) for the exact scope.
-Plugin hardware measurements used a different installer and do not qualify this
-one. See [design](../fabric-tool/DESIGN.md) and the
+Status: research-only. An earlier revision installed and verified ring and
+path tables on a ring of four DGX Sparks, passed plugin test arms on the path
+table, removed its table and restored SparkRing's table. Two defects found
+during that exercise were fixed afterwards on CPU; this fixed version has not
+yet been rerun on hardware. See the [release notes](release-0.1.0.md).
+Standalone tests cover planning, facts, generated Bash scripts, marker security,
+boot previews and mocked boot operations. They do not simulate an entire
+network or establish reboot restoration. See [testing and CI](testing.md),
+[design](../fabric-tool/DESIGN.md) and the
 [hardware procedure](../fabric-tool/HARDWARE-TEST-PLAN.md).

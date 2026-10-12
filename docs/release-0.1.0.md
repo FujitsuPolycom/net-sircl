@@ -8,7 +8,28 @@ all hosts in a job must use plugins with the same wire version.
 The release includes transport-core 0.1.0 (ABI 1), fabric-tool 0.1.0, examples,
 CPU tests and single-GPU NCCL emulation tests. fabric-tool configures relays,
 sender routes and packet markers, and provides a boot restoration unit. Its
-status is implemented, CPU-tested, research-only; it has not run on a DGX Spark.
+status is research-only. The fabric tool's hardware test plan ran on a ring
+of four DGX Sparks using upstream revision `760413a8`: the ring table and path
+table were installed and verified, plugin test arms passed on the path table,
+the tool's table was removed, and SparkRing's table was restored. This is
+evidence for those operations, not for reboot restoration or the entire
+two-ring qualification procedure.
+
+That hardware exercise exposed two defects, fixed afterwards on CPU in
+upstream revision `47de221a` and included here:
+
+- Read-script sections lacked a terminating newline. The 64-character marker
+  digest record swallowed the next section header, hiding ownership data and
+  blocking every apply. Every read section, including route checks, now ends
+  with a newline.
+- The backgrounded marker start held the SSH session's output open, so
+  `apply --execute` waited for the 180-second timeout even after installation.
+  Starts now use foreground `sudo -n setsid -f`, with stdin from `/dev/null`
+  and marker stdout and stderr directed to a log created by root.
+
+CPU regression tests exercise both generated scripts under Bash. The fixed
+version has not yet been rerun on hardware. Linux hosts require util-linux
+`setsid` with `-f` support; marker paths and command-line arguments are unchanged.
 
 The relay marker installs root-owned at
 `/usr/local/libexec/fabric-tool/fabric-tool-marker` with an adjacent SHA-256

@@ -107,7 +107,8 @@ List hosts in cable order. A host's *position* is its zero-based index on the
 the last-to-first cable; paths do not. Set `NCCL_ALGO=Ring`, launch one rank per
 host in cable order, and adjust `--nnodes` and `--node-rank`.
 
-Ring-of-four route derivation is CPU-tested but has not run on hardware.
+Plugin ring-of-four route derivation is CPU-tested; ring-of-four plugin
+traffic has not been measured. The fabric table exercise is described below.
 Other sizes and subsets are unsupported for hardware use, although the parser
 accepts up to 64 hosts. See [configuration](docs/configuration.md).
 
@@ -121,9 +122,11 @@ The bundled fabric-tool derives these from the topology file and installs them.
 Follow [fabric setup](docs/fabric.md) for facts collection, marker installation,
 apply, verification, ownership and boot restoration.
 
-fabric-tool is implemented and CPU-tested, research-only, and has not run on
-hardware. The plugin measurements used a different relay installer from the
-SparkRing project; they do not qualify fabric-tool or its boot unit.
+fabric-tool is research-only. An earlier revision installed and verified
+ring and path tables on four DGX Sparks, and plugin test arms passed on the
+path table. The two script fixes included here have only been tested on CPU;
+the fixed version has not yet been rerun on hardware, and boot restoration
+remains unqualified. See the [release notes](docs/release-0.1.0.md).
 
 ## Troubleshooting
 

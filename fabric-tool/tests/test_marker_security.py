@@ -41,7 +41,7 @@ def environment(tmp_path, monkeypatch):
 def forbid_execution(target, script, timeout):
     # Apply may still read installed lane routes when reporting blockers.
     assert script.startswith('set -u\n') and 'ip -o route get ' in script
-    assert all(line in ('set -u', 'echo @@end') or line.startswith(('echo @@route:', 'ip -o route get '))
+    assert all(line in ('set -u', 'echo @@end', commands.SECTION_END) or line.startswith(('echo @@route:', 'ip -o route get '))
                for line in script.splitlines()), 'blocked apply attempted a mutation'
     return ops.Result(0, '', '')
 
@@ -92,7 +92,7 @@ def test_plan_apply_and_boot_scripts_check_every_start(environment):
     for script in scripts:
         lines = script.splitlines()
         for index, line in enumerate(lines):
-            if line.startswith('(sudo -n setsid '):
+            if line.startswith('sudo -n setsid -f '):
                 starts += 1
                 assert tuple(lines[index - 4:index]) == (*commands.log_dir_setup(MARKER),
                                                        *commands.marker_checks(MARKER))
@@ -110,7 +110,7 @@ def test_marker_from_another_executable_is_replaced(environment):
     assert not result.blockers
     assert any(c.kind == 'marker' and c.action == 'replace' for c in result.changes)
     assert commands.marker_stop(MARKER, 4100)[0] in result.commands
-    assert any(MARKER.path in line and line.startswith('(sudo -n setsid ') for line in result.commands)
+    assert any(MARKER.path in line and line.startswith('sudo -n setsid -f ') for line in result.commands)
 
 
 def test_read_parser_retains_security_observations():

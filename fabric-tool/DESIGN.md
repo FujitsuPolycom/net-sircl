@@ -37,8 +37,9 @@ is a oneshot operation rather than marker supervision.
 
 See the installed guide `share/doc/net-sircl/docs/fabric.md` for the relay
 mechanism and command sequence. `HARDWARE-TEST-PLAN.md` describes hardware
-qualification. The tool is implemented and CPU-tested, research-only, and has
-not run on hardware. Standalone tests cover planning, facts, command forms,
+qualification. An earlier revision ran the ring/path table exercise on four
+DGX Sparks; the script fixes in this version have only been tested on CPU.
+The tool remains research-only. Standalone tests cover planning, facts, command forms,
 boot previews and mocked boot operations; full-network simulation and
 comparison tests that require another project are not distributed.
 
@@ -60,3 +61,12 @@ root. The launch shell removes the old log entry and creates a new file with
 noclobber, so a log symlink is not followed. Failed security checks exit the
 host script with status 4. The local digest record detects changes since
 installation; it does not authenticate the source or protect against root.
+
+
+Read-script sections, including route checks, end with an explicit newline so
+outputs without a trailing newline cannot consume the following header.
+Marker starts use foreground `sudo -n setsid -f` with stdin from `/dev/null`;
+the detached root shell creates the log and redirects marker stdout and stderr
+there. The SSH caller can finish without waiting for the long-lived marker.
+Standalone Bash regression tests check digest/ownership parsing and require
+the caller's captured output to close before a simulated marker exits.
