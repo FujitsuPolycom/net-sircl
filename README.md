@@ -1,7 +1,7 @@
 # net-sircl
 
 net-sircl is the Switchless Inference RDMA Collective Layer (SIRCL) for
-NVIDIA NCCL applications. For you, that means running across two or more
+NVIDIA NCCL applications. Current focus is two or more
 NVIDIA DGX Sparks cabled directly to each other, with no network switch.
 It supplies RDMA connections through NCCL's network-plugin (`ext-net`) interface.
 NCCL keeps its collective algorithms and CUDA-graph support. PyTorch and other
