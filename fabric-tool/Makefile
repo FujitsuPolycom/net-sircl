@@ -4,9 +4,9 @@ CFLAGS ?= -O2 -Wall -Wextra
 PREFIX ?= /usr/local
 
 .PHONY: all check install clean
-all: build/ring8-mesh-marker
+all: build/fabric-tool-marker
 
-build/ring8-mesh-marker: mesh_marker.c
+build/fabric-tool-marker: mesh_marker.c
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) -libverbs -lmlx5
 

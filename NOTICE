@@ -1,140 +1,62 @@
-net-sircl, an NCCL network plugin for DGX Spark cabling
+net-sircl, transport-core and fabric-tool were developed in the SparkRing
+project, whose contributors hold the copyright. The component notices below
+are also retained as identical excerpts in each component's NOTICE.
+
+net-sircl, an NCCL network plugin for directly cabled DGX Sparks
 Copyright 2026 SparkRing contributors
 Licensed under the Apache License, Version 2.0. See LICENSE.
-
-Includes software derived from RoCEnante (b12x/comm/roce, Local Inference Lab),
-written by Jason (original-el8) in local-inference-lab/b12x PR 295, with dual-rail
-striping and graph-collective work by Luke Alonso (lukealonso), licensed under
-Apache-2.0; b12x now lives in FlashInfer at flashinfer/experimental/b12x.
 
 NVIDIA NCCL headers
 -------------------
 Copyright (c) 2017-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-net-sircl/nccl contains unmodified Apache-2.0 plugin headers from NVIDIA NCCL
-v2.32.3-1, plugins/net/example/nccl. Individual copyright notices remain in each
-header. The NVIDIA license text is retained at net-sircl/nccl/LICENSE.txt.
+net-sircl/nccl/ (relative to the repository root) contains unmodified
+network-plugin headers from NVIDIA NCCL v2.32.3-1, plugins/net/example/nccl/:
+common.h, err.h, gin_v11.h, net.h, net_device.h, net_v2.h through net_v12.h,
+and types.h. Their individual notices remain; the Apache-2.0 license text
+is in net-sircl/nccl/LICENSE.txt.
 
-Detailed inherited notices follow. They are also retained in their components.
+No NCCL source is copied into net-sircl/net_sircl.c. NCCL v2.32.3-1 sources
+read for behavior, without adaptation: src/transport/net_ib/connect.cc,
+p2p.cc, init.cc, reg.cc and gdr.cc; src/transport/net.cc; src/graph/topo.cc;
+src/init.cc.
 
-net-sircl, an NCCL network plugin for DGX Spark cabling
-Copyright 2026 SparkRing contributors
-
-This product is licensed under the Apache License, Version 2.0 (see LICENSE).
-
-NCCL source
------------
-nccl/ holds NVIDIA NCCL's network-plugin headers, copied unchanged (byte-identical) from NVIDIA NCCL tag
-v2.32.3-1, plugins/net/example/nccl/: common.h, err.h, gin_v11.h, net.h, net_device.h, net_v2.h, net_v3.h,
-net_v4.h, net_v5.h, net_v6.h, net_v7.h, net_v8.h, net_v9.h, net_v10.h, net_v11.h, net_v12.h and types.h.
-Copyright (c) 2017-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. They are licensed under the
-Apache License, Version 2.0; NCCL's licence text is in nccl/LICENSE.txt.
-
-No NCCL source is copied into net_sircl.c. These NCCL v2.32.3-1 sources were read for NCCL's behaviour and not
-adapted: src/transport/net_ib/connect.cc, p2p.cc, init.cc, reg.cc and gdr.cc; src/transport/net.cc;
-src/graph/topo.cc; src/init.cc.
-
-SIRCL and RoCEnante
--------------------
-net-sircl follows the transport design of SparkRing's SIRCL ring sessions (sparkring-sircl), which derive from
-RoCEnante, the b12x one-shot RoCE collectives (b12x/comm/roce), by Local Inference Lab
-(https://github.com/local-inference-lab) and its contributors, including Luke Alonso (lukealonso), licensed
-under the Apache License, Version 2.0. RoCEnante was written by Jason (original-el8) in
-local-inference-lab/b12x PR 295, with dual-rail striping and graph-collective work by Luke Alonso
-(lukealonso). b12x is developed inside FlashInfer at flashinfer/experimental/b12x.
-
-What net-sircl takes from that design: one-sided RDMA writes ordered on one queue pair and closed by 4-byte
-flag words; the use of both PCI functions of a cable as two lanes (dual rail); and a cap on the bytes in
-flight toward a peer reached through relays. Its route derivation follows SIRCL's route planner
-(sparkring_sircl/routes.py, derive_lanes), written again in C. No RoCEnante or SIRCL source file is copied
-into net_sircl.c.
-
-Test infrastructure
--------------------
-tests/standin/ contains compatibility includes into transport-core, which owns
-SparkRing's shared-memory verbs provider. Retain transport-core/LICENSE,
-transport-core/NOTICE and transport-core/PROVENANCE.json in a standalone package.
-The provider is test infrastructure and is not linked into the real-NIC plugin.
-
-Shared transport extraction
----------------------------
-Device metadata, topology derivation, RC queue-pair setup, registration,
-posting/completion primitives and window arithmetic use transport-core 0.1.0.
-The ext-net API, CTS protocol, registration policy and progress scheduling remain
-owned by net-sircl. Hardware measurements for the shared-core source a4de4dd5 are summarized in
-../docs/measurements.md, with scope and conditions. They are not performance guarantees.
-
-SparkRing shared RDMA transport core
-Copyright 2026 SparkRing contributors
-Licensed under Apache-2.0; see LICENSE.
-
-SIRCL and RoCEnante
-------------------
-This core extracts transport mechanics from SparkRing's SIRCL and libsircl,
-which derive from Local Inference Lab's b12x RoCEnante (b12x/comm/roce),
-licensed under Apache-2.0. RoCEnante was written by Jason (original-el8) in
+RoCEnante attribution
+---------------------
+Includes transport design derived from RoCEnante, the b12x RoCE collectives
+from Local Inference Lab (https://github.com/local-inference-lab), licensed
+under Apache-2.0. RoCEnante was written by Jason (original-el8) in
 local-inference-lab/b12x PR 295, with dual-rail striping and graph-collective
 work by Luke Alonso (lukealonso). b12x is developed in FlashInfer at
-flashinfer/experimental/b12x. Preserve the provenance of derived source and
-the original copyright notices when redistributing an extraction.
+flashinfer/experimental/b12x.
 
-NVIDIA NCCL
------------
-The accompanying net-sircl plugin retains NVIDIA's Apache-2.0 network-plugin
-headers and their notices: Copyright (c) 2017-2026 NVIDIA CORPORATION &
-AFFILIATES. Its nccl/LICENSE.txt travels with the standalone bundle. The core
-uses SparkRing transport implementation, not a newly copied NVIDIA NCCL
-implementation. Consult net-sircl/NOTICE for its inherited source-reading
-provenance. Vendored API headers were read to preserve compatibility.
+The plugin's transport design and C route derivation follow the originating
+project's collective library. No RoCEnante source file is copied into
+net-sircl/net_sircl.c. net-sircl/tests/standin/ includes transport-core's
+shared-memory RDMA emulator, used by tests rather than the real-NIC plugin.
 
-Extraction origins
-------------------
-SIRCL/libsircl: SparkRing 947bce1e.
-net-sircl: SparkRing 7b81b968.
-src/topology.c and src/sysfs.c extract net-sircl's C topology/device helpers.
-src/fabric.c extracts libsircl's transport planning; collective algorithms
-remain in libsircl.
-src/shm_verbs.c and include/sircl_core/emulation* own the shared-memory test
-provider previously copied between libsircl and net-sircl. This provider is
-test infrastructure, not a simulation of real relay capacity or performance.
-src/verbs_dl.c retains libsircl's runtime-loaded verbs provider.
-tools/adapt_proxy.py creates reviewed core-adapted compilations from pristine,
-hash-checked SIRCL ABI9 proxy source; it does not alter the serving source.
-
-
-Standalone fabric-tool attribution
-==================================
-
-fabric-tool, the relay table of directly cabled DGX Sparks
+transport-core, the RDMA transport library used by net-sircl
 Copyright 2026 SparkRing contributors
+Licensed under the Apache License, Version 2.0. See LICENSE.
 
-This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+Contains RDMA setup and planning code from the collective library and its C
+implementation, libsircl, in the SparkRing project. Derived from project
+revisions 947bce1e (collective library) and 7b81b968 (network plugin).
+transport-core contains no NVIDIA NCCL code.
 
-Absorbed source
----------------
-The relay plan's derivation, checks, shell commands, host-state parsing,
-comparison and reports are absorbed from SparkRing's SIRCL relay plan
-installer and route module:
+RoCEnante attribution
+---------------------
+Includes transport design derived from RoCEnante, the b12x RoCE collectives
+from Local Inference Lab (https://github.com/local-inference-lab), licensed
+under Apache-2.0. RoCEnante was written by Jason (original-el8) in
+local-inference-lab/b12x PR 295, with dual-rail striping and graph-collective
+work by Luke Alonso (lukealonso). b12x is developed in FlashInfer at
+flashinfer/experimental/b12x.
 
-- sparkring_sircl/routes.py      -> fabric_tool/model.py
-- sparkring_sircl/fabric/plan.py -> fabric_tool/plan.py
-- sparkring_sircl/fabric/commands.py -> fabric_tool/commands.py
-- sparkring_sircl/fabric/state.py    -> fabric_tool/state.py
-- sparkring_sircl/fabric/diff.py     -> fabric_tool/diff.py
-- sparkring_sircl/fabric/ops.py      -> fabric_tool/ops.py
-- sparkring_sircl/fabric/report.py   -> fabric_tool/report.py
-- sparkring_sircl/fabric/mesh_marker.c -> mesh_marker.c (unchanged)
+fabric-tool, a relay installer for directly cabled DGX Sparks
+Copyright 2026 SparkRing contributors
+Licensed under the Apache License, Version 2.0. See LICENSE.
 
-as of SparkRing branch codex/shared-transport-core, commit a4de4dd5. The
-tool's layout inputs follow SparkRing's runtime rendering of the same plan
-(runtime/host/relays.py: a whole cycle is one whole-ring group with
-same-function relay egress; a path is a group on a ring one Spark longer,
-with sibling egress). The topology-file format is net-sircl's
-(spark_transport/transport-core/src/topology.c), parsed to the same defaults.
-
-Measured constraints the absorbed derivation encodes (SparkRing's
-measurements on the cycle-of-eight cabling, 2026-10-11): a relay's hairpin
-queue holds 512 KiB, the device maximum, and cannot pause its sender; relay
-egress through the sibling Socket Direct function lowered burst loss to
-0.06 % at 2 MiB; queue pairs use flow label 0; tags are EtherTypes chosen by
-destination address because the sender NIC computes the ICRC after the
-RDMA-TX rewrite.
+Relay planning, host-state parsing, command generation and reporting derive
+from the SparkRing project's relay installer, revision
+852407bd1f946840debce36a7299d303dfceb8cb. mesh_marker.c retains that source's
+bytes. SOURCE.json at the repository root records source provenance.

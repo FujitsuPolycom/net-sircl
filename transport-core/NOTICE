@@ -1,36 +1,17 @@
-SparkRing shared RDMA transport core
+transport-core, the RDMA transport library used by net-sircl
 Copyright 2026 SparkRing contributors
-Licensed under Apache-2.0; see LICENSE.
+Licensed under the Apache License, Version 2.0. See LICENSE.
 
-SIRCL and RoCEnante
-------------------
-This core extracts transport mechanics from SparkRing's SIRCL and libsircl,
-which derive from Local Inference Lab's b12x RoCEnante (b12x/comm/roce),
-licensed under Apache-2.0. RoCEnante was written by Jason (original-el8) in
+Contains RDMA setup and planning code from the collective library and its C
+implementation, libsircl, in the SparkRing project. Derived from project
+revisions 947bce1e (collective library) and 7b81b968 (network plugin).
+transport-core contains no NVIDIA NCCL code.
+
+RoCEnante attribution
+---------------------
+Includes transport design derived from RoCEnante, the b12x RoCE collectives
+from Local Inference Lab (https://github.com/local-inference-lab), licensed
+under Apache-2.0. RoCEnante was written by Jason (original-el8) in
 local-inference-lab/b12x PR 295, with dual-rail striping and graph-collective
 work by Luke Alonso (lukealonso). b12x is developed in FlashInfer at
-flashinfer/experimental/b12x. Preserve the provenance of derived source and
-the original copyright notices when redistributing an extraction.
-
-NVIDIA NCCL
------------
-The accompanying net-sircl plugin retains NVIDIA's Apache-2.0 network-plugin
-headers and their notices: Copyright (c) 2017-2026 NVIDIA CORPORATION &
-AFFILIATES. Its nccl/LICENSE.txt travels with the standalone bundle. The core
-uses SparkRing transport implementation, not a newly copied NVIDIA NCCL
-implementation. Consult net-sircl/NOTICE for its inherited source-reading
-provenance. Vendored API headers were read to preserve compatibility.
-
-Extraction origins
-------------------
-SIRCL/libsircl: SparkRing 947bce1e.
-net-sircl: SparkRing 7b81b968.
-src/topology.c and src/sysfs.c extract net-sircl's C topology/device helpers.
-src/fabric.c extracts libsircl's transport planning; collective algorithms
-remain in libsircl.
-src/shm_verbs.c and include/sircl_core/emulation* own the shared-memory test
-provider previously copied between libsircl and net-sircl. This provider is
-test infrastructure, not a simulation of real relay capacity or performance.
-src/verbs_dl.c retains libsircl's runtime-loaded verbs provider.
-tools/adapt_proxy.py creates reviewed core-adapted compilations from pristine,
-hash-checked SIRCL ABI9 proxy source; it does not alter the serving source.
+flashinfer/experimental/b12x.

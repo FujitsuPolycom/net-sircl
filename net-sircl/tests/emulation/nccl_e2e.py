@@ -13,8 +13,7 @@ Each rank: bfloat16 all-reduce, all-gather and broadcast from 8 KiB to 64 MiB, e
 one CUDA graph of a 64 KiB all-reduce replayed 20 times with new inputs, checked; then teardown:
   release-graph  the graph is deleted and the stream synchronized before destroy_process_group (the order
                  nccl-tests uses);
-  keep-graph     destroy_process_group while the captured graph still exists (the order of the 2026-10-11 T1
-                 script). NCCL's destroy waits until every graph that holds the communicator is gone
+  keep-graph     destroy_process_group while the captured graph still exists (an order some application scripts use). NCCL's destroy waits until every graph that holds the communicator is gone
                  (init.cc commDestroySync, "keep polling until all graphs referencing us die").
 Each rank prints "PASS" after destroy returns. --launch starts both ranks with the environment and reports
 per rank: exit status, whether PASS printed, and how long teardown took (a 60 s limit for teardown).
@@ -94,7 +93,7 @@ def launch(args):
                 NCCL_DEBUG_SUBSYS="INIT,NET", NCCL_SOCKET_IFNAME="lo")
     if args.net == "sircl":
         base.update(NCCL_NET="sircl", NCCL_NET_PLUGIN=args.plugin, NET_SIRCL_OOB_ADDR="127.0.0.1",
-                    SIRCL_EMU_FABRIC=f"/sircl-emu-glm-e2e-{os.getpid()}", NET_SIRCL_STANDIN_DEVICES="2")
+                    SIRCL_EMU_FABRIC=f"/net-sircl-e2e-{os.getpid()}", NET_SIRCL_STANDIN_DEVICES="2")
     else:
         base.update(NCCL_NET="Socket", NCCL_NET_PLUGIN="none")
     procs = []
@@ -132,14 +131,14 @@ def launch(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--launch", action="store_true")
-    parser.add_argument("--rank", action="store_true")
-    parser.add_argument("--teardown", choices=("release-graph", "keep-graph"), default="release-graph")
-    parser.add_argument("--net", choices=("sircl", "socket"), default="sircl")
-    parser.add_argument("--windowed", action="store_true")
-    parser.add_argument("--plugin", default="")
-    parser.add_argument("--timeout", type=float, default=240)
-    parser.add_argument("--out", default="/tmp/nccl-e2e")
+    parser.add_argument("--launch", action="store_true", help='Launch two ranks sharing one CUDA GPU')
+    parser.add_argument("--rank", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--teardown", choices=("release-graph", "keep-graph"), default="release-graph", help='Whether to release captured graphs before communicator destruction')
+    parser.add_argument("--net", choices=("sircl", "socket"), default="sircl", help='NCCL transport to test')
+    parser.add_argument("--windowed", action="store_true", help='Use two lanes and a shared relay window')
+    parser.add_argument("--plugin", default="", help='Path to the emulated plugin shared library')
+    parser.add_argument("--timeout", type=float, default=240, help='Rank timeout in seconds')
+    parser.add_argument("--out", default="/tmp/nccl-e2e", help='Directory for rank logs and JSON summary')
     args = parser.parse_args()
     if args.rank:
         return rank_main(args)

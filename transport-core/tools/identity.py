@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def source_id():
     digest = hashlib.sha256()
-    files = [ROOT / "VERSION", ROOT / "PROXY_INPUTS.json"]
+    files = [ROOT / "VERSION"]
     for directory in ("include", "src", "tools"):
         files.extend(p for p in (ROOT / directory).rglob("*") if p.is_file() and p.suffix in (".h", ".c", ".py"))
     for p in sorted(files):

@@ -1,7 +1,6 @@
 """What a host holds: the parsed output of the tool's read script.
 
-Absorbed from ``sparkring_sircl.fabric.state`` (SparkRing
-``spark_transport/sircl/sparkring_sircl/fabric/state.py``); see NOTICE.
+Derived from the SparkRing relay installer; see NOTICE.
 
 The read script (:func:`.commands.read_script`) prints ``@@<section>`` blocks:
 the host name, the iproute2 versions, ``ip -j addr show``, the network device

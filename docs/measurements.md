@@ -1,96 +1,133 @@
-# Hardware measurements
+# Plugin versus stock NCCL: hardware measurements
 
-These are research-only communication measurements, not serving qualification
-or performance guarantees. No hardware was accessed to prepare this release.
-The local release changes packaging, documentation, tests and the plugin version
-stamp; the transport C sources and NVIDIA headers retain the measured source bytes.
+These are research-only communication measurements on DGX Spark GB10, not
+serving qualification or throughput guarantees. The measured plugin builds
+used transport C sources and NVIDIA headers byte-identical to this release
+([SOURCE.json](../SOURCE.json)), with a different plugin version string.
+The 0.1.0 library itself has not run on Sparks. Raw logs are not published
+because they contain site-specific host information.
 
-## Shared-core source
+## Conditions
 
-Source: SparkRing `a4de4dd5280f01613889ced7873aa85ccf8dc2bb` compared with plugin
-RC `7b81b968`, both wire version 2. Evidence record:
-`shared-core-hw-20261012/RESULTS.md`, 2026-10-12 06:07–07:41 UTC.
-The record identifiers here identify the owner's research archive; raw logs
-contain private site information and are not included in this public repository.
+Plugin runs used unpatched NVIDIA NCCL 2.32.3, nccl-tests v2.21.1, bfloat16,
+one process/GPU per host, host-memory staging, relaxed ordering enabled and
+both PCI functions per cable. GPU application clocks were set to 2418 MHz.
+Model-serving processes were stopped on the eight hosts.
 
-Conditions: DGX Spark GB10, unpatched NVIDIA NCCL 2.32.3 rebuilt from pinned
-source, nccl-tests v2.21.1, bfloat16, one process/GPU per host, host-memory
-staging, relaxed ordering enabled, both PCI functions per cable. Application
-clocks were set to 2418 MHz; driver versions were 580.173.02 and 580.178.04.
-Models were stopped on all eight hosts. A pair used one cable of the physical
-cycle of eight; the path used four consecutive positions with its closing peer
-connection forwarded through two intermediate hosts. Other physical cables
-remained connected. Relay tables were already installed.
+The pair used one cable of a physical ring of eight. The path used four
+consecutive hosts, with traffic between end hosts crossing two intermediate
+relays. Other physical cables remained connected. Relays were configured
+with a different installer from the SparkRing project, not fabric-tool.
+The pair used 64 channels; ring and path used `NCCL_ALGO=Ring` and four channels.
 
-The pair used 64 channels and both cable functions. Cycle and path used
-`NCCL_ALGO=Ring` and four channels. The 13 nccl-tests lines covered an 8-byte
-probe plus all-reduce, all-gather and broadcast, eager and CUDA graphs (`-G 20`),
-over small (8 KiB–2 MiB) and large (8–256 MiB) size sweeps.
-All 13 arms passed every line: every rank exited zero, and every reported
-`#wrong` value and out-of-bounds error count was zero.
+Thirteen nccl-tests runs per layout covered an 8-byte connectivity check, then
+all-reduce, all-gather and broadcast, each eager and with CUDA graphs (`-G 20`),
+over 8 KiB–2 MiB and 8–256 MiB sweeps. In every plugin run, every rank exited
+zero, with zero wrong values and zero out-of-bounds errors reported.
 
-The following are 256 MiB **out-of-place bus bandwidth**, GB/s, means of two
-runs per variant in RC/candidate/candidate/RC order. Ratios compare candidate
-with RC, not with stock NCCL.
+## Results
 
-| Layout | Collective | RC eager / graph | Shared core eager / graph |
+Values below are **256 MiB out-of-place bus bandwidth in GB/s**. Plugin values
+are means of two runs. A dash means no stock value is reported for that
+collective and mode. Stock means NCCL's own IB transport with the plugin disabled.
+
+| Layout | Collective | net-sircl eager / CUDA graph | Stock NCCL |
 |---|---|---|---|
-| Pair | all-reduce | 21.60 / 21.47 | 21.51 / 21.50 |
-| Pair | all-gather | 19.00 / 18.92 | 18.72 / 18.87 |
-| Pair | broadcast | 23.52 / 23.48 | 23.59 / 23.44 |
-| Cycle of eight | all-reduce | 23.95 / 23.94 | 23.95 / 23.93 |
-| Cycle of eight | all-gather | 23.18 / 23.12 | 23.18 / 23.12 |
-| Cycle of eight | broadcast | 24.28 / 24.32 | 24.26 / 24.31 |
-| Path of four | all-reduce | 17.70 / 17.67 | 17.67 / 17.73 |
-| Path of four | all-gather | 18.14 / 18.00 | 18.12 / 18.06 |
-| Path of four | broadcast, root 0 | 24.32 / 24.31 | 24.30 / 24.30 |
+| Pair | all-reduce | 21.51 / 21.50 | 20.62 eager, one same-session run |
+| Pair | all-gather | 18.72 / 18.87 | — |
+| Pair | broadcast | 23.59 / 23.44 | — |
+| Ring of eight | all-reduce | 23.95 / 23.93 | 23.77 eager, separate session/build, cuMem on |
+| Ring of eight | all-gather | 23.18 / 23.12 | — |
+| Ring of eight | broadcast | 24.26 / 24.31 | — |
+| Path of four | all-reduce | 17.67 / 17.73 | Did not complete within 75 s in a separate session/build |
+| Path of four | all-gather | 18.12 / 18.06 | Did not complete within 75 s in a separate session/build |
+| Path of four | broadcast, root 0 | 24.30 / 24.30 | Passed; bandwidth not reported here |
 
-Candidate/RC ratios were 0.986–1.003 for the pair, 0.999–1.000 for the cycle,
-and 0.998–1.003 for the path. Stock NCCL's pair eager all-reduce was 20.62 GB/s
-in one same-session reference run. No measured relay error counter grew across
-the complete readings bracketing the nccl-tests arms.
+The separate stock runs also used NCCL 2.32.3 and nccl-tests v2.21.1. They are
+context, not a same-binary control for the plugin's ring and path measurements.
+On the ring of eight, all stock runs passed with NCCL's cuMem memory allocator
+enabled (`NCCL_CUMEM_ENABLE=1`). Disabling it caused setup failures between
+non-adjacent hosts used by the tree algorithm. On the path, the 8-byte check
+connected, but traffic between the end hosts moved at about 0.5 MB/s.
+Root-0 broadcast passed because it did not use that end-host connection.
 
-The pair graph follow-up used six runs per variant over 18 rows (three
-collectives, six sizes from 8–256 MiB). No row was lower under the predeclared
-separation rule. Initial two-run separations did not reproduce. This is a
-run-to-run comparison, not a confidence bound for all workloads.
+On the pair, 8 MiB eager all-reduce reached 11.84 GB/s with the plugin versus
+10.93 GB/s stock in the same session (1.08 times stock). This single comparison
+does not characterise small-message performance.
 
-PyTorch 2.13.0+cu130 with NCCL 2.32.3 preloaded on the path of four passed four
-runs per variant: DDP for 20 steps with identical parameters, eight eager
-all-reduce sizes, and 20 replays of a 64 KiB captured all-reduce. All graphs were
-released before process-group destruction. Shared-core teardown returned in
-0.17–0.31 seconds on every rank.
+PyTorch 2.13.0+cu130 with NCCL 2.32.3 loaded through `LD_PRELOAD` passed four
+repetitions on the path of four: 20 DDP steps ending with identical parameters
+on every rank, eager all-reduce at eight sizes, and 20 replays of a captured
+64 KiB all-reduce. With all graphs released before `destroy_process_group`,
+teardown took 0.17–0.31 s per rank.
 
-## RC and stock references
+## Reproduce the comparison
 
-`nccl-net-rc-20261011/RESULTS.md` records RC `7b81b968`, NCCL 2.32.3,
-nccl-tests v2.21.1, bfloat16 on a pair and a path of four. The hardware session
-ran on 2026-10-12 around 03:10 UTC despite the record's date label. GPU clocks
-were set to 2418 MHz, driver 580.173.02, with preinstalled relay state, both
-functions per cable and relaxed ordering on. The NCCL binary differs from the
-later shared-core session's rebuild.
+Use an MPI-enabled nccl-tests v2.21.1 build linked to unpatched NCCL 2.32.3.
+The commands below are reproduction templates, not archived historical command
+lines. Set `TESTS` to the nccl-tests build directory on every host, `HOSTS` to
+comma-separated host names in cable order, and `BOOTSTRAP_IFACE` to a reachable
+management interface. Use the same library paths on every host, stop competing
+workloads, and record driver, firmware, DGX OS, clock and NCCL versions.
+Configure relays before path or non-neighbour ring traffic.
 
-On the pair, RC/stock bus bandwidth was at least 0.9 on 35 of 36 rows from
-8–256 MiB. Eager all-reduce at 8 MiB was 10.53 versus 12.89 GB/s (0.82).
-The shared-core session's RC row was 10.68 versus stock 10.93 (0.98), while
-the candidate reached 11.84. The weak row is not a universal regression claim
-or a resolved performance guarantee. The RC path reached 17.74 GB/s all-reduce
-at 256 MiB through two relays, eager and with `-G 20`.
+For a pair (two names in `HOSTS`), copy the matching topology to every host:
 
-`ring8-finale-20261011/RESULTS.md` records stock NCCL 2.32.3 on the same classes
-of layouts. On the cycle of eight with cuMem on, every line passed, with eager
-256 MiB all-reduce at 23.77 GB/s. A cuMem-off probe failed on nonadjacent tree
-connections. On the path of four, the 8-byte probe connected but all-reduce and
-all-gather timed out at 75 seconds; data crossing the relayed closing pair ran
-at roughly 0.5 MB/s. Root-0 broadcast passed because it did not use that pair.
-Thus “stock does not run the path” refers to usable relayed collectives, not
-an inability to establish any connection. This stock session is context, not
-a same-binary control for the shared-core cycle measurement.
+```sh
+export TESTS=/opt/nccl-tests/build
+export NCCL_NET_PLUGIN=/opt/net-sircl/lib/libnccl-net-sircl.so
+export NCCL_NET=sircl NET_SIRCL_TOPOLOGY=/etc/net-sircl.topology
+export NCCL_SOCKET_IFNAME=BOOTSTRAP_IFACE
+export NCCL_MIN_NCHANNELS=64 NCCL_MAX_NCHANNELS=64
+export NCCL_CUMEM_ENABLE=1 NET_SIRCL_RELAXED_ORDERING=1 NCCL_DEBUG=INFO
+unset NCCL_ALGO
+mpirun -np 2 --host "$HOSTS" --map-by ppr:1:node \
+  -x NCCL_NET_PLUGIN -x NCCL_NET -x NET_SIRCL_TOPOLOGY -x NCCL_SOCKET_IFNAME \
+  -x NCCL_MIN_NCHANNELS -x NCCL_MAX_NCHANNELS -x NCCL_CUMEM_ENABLE \
+  -x NET_SIRCL_RELAXED_ORDERING -x NCCL_DEBUG \
+  "$TESTS/all_reduce_perf" -b 8M -e 256M -f 2 -g 1 -d bfloat16 -c 1
+```
+
+For a ring of eight, set `HOSTS` to eight hosts, install its topology, and keep
+the common plugin, bootstrap and memory settings above:
+
+```sh
+export NCCL_ALGO=Ring NCCL_MIN_NCHANNELS=4 NCCL_MAX_NCHANNELS=4
+mpirun -np 8 --host "$HOSTS" --map-by ppr:1:node \
+  -x NCCL_NET_PLUGIN -x NCCL_NET -x NET_SIRCL_TOPOLOGY -x NCCL_SOCKET_IFNAME \
+  -x NCCL_ALGO -x NCCL_MIN_NCHANNELS -x NCCL_MAX_NCHANNELS -x NCCL_CUMEM_ENABLE \
+  -x NET_SIRCL_RELAXED_ORDERING -x NCCL_DEBUG \
+  "$TESTS/all_reduce_perf" -b 8M -e 256M -f 2 -g 1 -d bfloat16 -c 1
+```
+
+For a path of four, set `HOSTS` to four consecutive hosts, install its topology
+and verify relays. With the common settings above:
+
+```sh
+export NCCL_ALGO=Ring NCCL_MIN_NCHANNELS=4 NCCL_MAX_NCHANNELS=4
+mpirun -np 4 --host "$HOSTS" --map-by ppr:1:node \
+  -x NCCL_NET_PLUGIN -x NCCL_NET -x NET_SIRCL_TOPOLOGY -x NCCL_SOCKET_IFNAME \
+  -x NCCL_ALGO -x NCCL_MIN_NCHANNELS -x NCCL_MAX_NCHANNELS -x NCCL_CUMEM_ENABLE \
+  -x NET_SIRCL_RELAXED_ORDERING -x NCCL_DEBUG \
+  "$TESTS/all_reduce_perf" -b 8M -e 256M -f 2 -g 1 -d bfloat16 -c 1
+```
+
+Add `-G 20` for CUDA graphs. Substitute `all_gather_perf` or `broadcast_perf`
+(root 0) for the other collectives. Use `-b 8K -e 2M` for the small sweep
+and `-b 8 -e 8` for the connectivity check. Record each rank's exit code,
+wrong-value and out-of-bounds counts, plus the out-of-place bus bandwidth.
+
+For matched stock controls set `NCCL_NET_PLUGIN=none NCCL_NET=IB`, retaining
+the same host order, channels, NCCL binary and other settings. Confirm the
+INIT log selects the built-in IB transport. Run eager and graph cases twice
+per layout and report individual runs as well as means. Record timeouts as
+failures, not zero throughput. The separate-session stock values above are
+not predictions for this matched-control procedure.
 
 ## Unmeasured conditions
 
-No ring-of-four hardware run; no relaxed-ordering-off comparison. No serving
-performance or arbitrary multi-sender relay-budget qualification. CPU tests
-and shared-memory emulation do not establish physical relay behavior, real
-queue-pair loss recovery or NIC performance. Release 0.1.0 has not had a separate
-hardware session with its final version string and package-derived core digest.
+No ring-of-four hardware run or measurement with relaxed ordering disabled.
+No serving performance or combined multi-sender relay qualification. CPU tests
+and shared-memory emulation do not establish physical forwarding, real NIC
+loss recovery, reboot restoration or NIC performance. fabric-tool has not run
+on hardware. The 0.1.0 binary has not run on hardware.

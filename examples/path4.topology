@@ -1,4 +1,4 @@
 # Replace names. Port 0 -> next host's port 1; no closing cable.
-# Install relay tables and endpoint routes before starting NCCL.
+# Install relays and sender routes with fabric-tool before starting NCCL (see docs/fabric.md).
 hosts node-0 node-1 node-2 node-3
 cabling path

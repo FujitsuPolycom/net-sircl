@@ -144,7 +144,7 @@ def _command_plan(args: argparse.Namespace) -> int:
         facts = Facts.symbolic_for(topology.hosts)
     plan = build_plan(topology.group, facts, max_relays=args.max_relays)
     if args.json:
-        print(json.dumps({"schema": "fabric-tool-plan/v1", "topology": args.topology,
+        print(json.dumps({"schema": "fabric-tool-plan/v2", "topology": args.topology,
                           "hosts": list(topology.hosts), "cabling": topology.cabling,
                           "relay_egress": topology.group.relay_egress, "plan": plan.to_json()}, indent=1))
         return 0
@@ -377,7 +377,7 @@ def _parser() -> argparse.ArgumentParser:
 
     def relay_options(sub: argparse.ArgumentParser) -> None:
         sub.add_argument("--max-relays", type=int, default=model.DEFAULT_MAX_RELAYS,
-                         help=f"relay limit per lane (default {model.DEFAULT_MAX_RELAYS}, the qualified limit; "
+                         help=f"relay limit per lane (default {model.DEFAULT_MAX_RELAYS}, not hardware-qualified; "
                               "higher values are research-only)")
 
     plan_parser = commands_parser.add_parser("plan", help="print a topology's relay plan (OFFLINE, default)")

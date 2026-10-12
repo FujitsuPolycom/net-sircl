@@ -1,4 +1,4 @@
-"""Run both NCCL emulation modes; only an explicit optional mode may skip."""
+"""Run single-GPU NCCL emulation in plain and windowed modes."""
 import argparse
 import json
 from pathlib import Path
@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--if-available", action="store_true")
+    parser.add_argument("--if-available", action="store_true", help="print SKIP and exit 0 if CUDA PyTorch, a GPU or runtime NCCL 2.32.3 is missing")
     args = parser.parse_args()
     reason = None
     try:
@@ -46,11 +46,11 @@ def main():
             return result.returncode
         summary = json.loads(result.stdout.strip().splitlines()[-1])
         if not all(r["plugin"] and r["exact_lines"] == 7 and not r["wrong"] for r in summary["ranks"]):
-            raise RuntimeError("NCCL did not verify every collective through sircl")
+            raise RuntimeError("a rank did not load the sircl network or reported a wrong collective result; see test-results/<mode>/rank*.log")
         for rank in range(2):
             log = (output / f"rank{rank}.log").read_text()
             if "net-sircl 0.1.0 (wire version 2)" not in log or "transport-core 0.1.0 ABI 1 source " not in log:
-                raise RuntimeError("initialization identity missing")
+                raise RuntimeError("rank log lacks net-sircl 0.1.0 (wire version 2) or the transport-core identity line; rebuild with make emu")
     return 0
 
 

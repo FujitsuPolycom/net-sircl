@@ -32,10 +32,10 @@ def test_command_forms():
     assert commands.filter_del("enp1s0f0np0", 11, protocol=0x88b5, handle=1) == (
         "sudo -n tc filter del dev enp1s0f0np0 ingress protocol 0x88b5 pref 11 handle 1 flower")
     assert commands.marker_start(MARKER, "rocep1s0f0", [("192.0.2.10", 0x88b5)]) == (
-        "(sudo -n setsid /var/tmp/ring8-mesh-marker --device rocep1s0f0 --rule 192.0.2.10=0x88b5 --managed "
-        "< /dev/null > /tmp/ring8-mesh-marker-rocep1s0f0.log 2>&1 &)")
+        "(sudo -n setsid /var/tmp/fabric-tool-marker --device rocep1s0f0 --rule 192.0.2.10=0x88b5 --managed "
+        "< /dev/null > /tmp/fabric-tool-marker-rocep1s0f0.log 2>&1 &)")
     stop, wait = commands.marker_stop(MARKER, 4100)
-    assert stop == '[ "$(cat /proc/4100/comm 2>/dev/null)" != ring8-mesh-mark ] || sudo -n kill 4100'
+    assert stop == '[ "$(cat /proc/4100/comm 2>/dev/null)" != fabric-tool-mar ] || sudo -n kill 4100'
     assert wait.startswith("for i in $(seq 1 50)")
     assert commands.record_remove() == "sudo -n rm -f /run/fabric-table/relay-state.json"
 

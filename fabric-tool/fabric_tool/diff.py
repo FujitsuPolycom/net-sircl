@@ -1,7 +1,6 @@
 """Comparison of one host's objects with its plan, and the script that reconciles them.
 
-Absorbed from ``sparkring_sircl.fabric.diff`` (SparkRing
-``spark_transport/sircl/sparkring_sircl/fabric/diff.py``); see NOTICE.
+Derived from the SparkRing relay installer; see NOTICE.
 :func:`compare_up` compares a host with its group's plan; :func:`compare_down`
 lists everything ``remove`` deletes. Both return a :class:`HostDiff`: the
 changes (``add``, ``remove``, ``replace``; ``mark`` puts the ownership mark on
@@ -152,7 +151,7 @@ def _common_blockers(diff: HostDiff, state: HostState, *, check_hostname: bool) 
     if state.sparkring_record is not None:
         diff.blockers.append(f"SparkRing's relay table is installed (its record {commands.SPARKRING_RECORD_PATH} "
                              f"names group {state.sparkring_record.get('group')}); remove it with SparkRing's own "
-                             "command first")
+                             "command first; see docs/fabric.md, Ownership")
     if state.record is not None and state.record.get("group") != diff.group:
         diff.blockers.append(f"the host belongs to group {state.record.get('group')} (layout "
                              f"{state.record.get('layout')}); remove that group with `remove` first")
@@ -375,7 +374,7 @@ def compare_boot(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_na
                  check_hostname: bool = True) -> HostDiff:
     """What ``apply --boot`` installs on one host: the parts of the plan that are missing.
 
-    The restore semantics of SparkRing's runtime restore: add every missing
+    Restore missing state: add every missing
     object, replace a differing object in place at its own reserved
     preference, protocol or destination, restart markers whose rules differ or
     that are gone, rewrite the record; remove nothing. ``adopt`` is accepted

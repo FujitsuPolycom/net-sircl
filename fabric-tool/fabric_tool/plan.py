@@ -1,20 +1,17 @@
-"""The relay plan of a layout, absorbed from SparkRing's SIRCL installer.
+"""Derive relay paths, routes, marker rules and forwarding filters.
 
-Absorbed from ``sparkring_sircl.fabric.plan`` (SparkRing
-``spark_transport/sircl/sparkring_sircl/fabric/plan.py``); see NOTICE. The
-derivation, the checks and the objects are SparkRing's, unchanged in effect:
-the tool plans one group, the fabric of a topology file.
+Derived from the SparkRing relay installer; see NOTICE.
 
 Carried paths. For every ordered pair of members the plan carries every
 shortest path of the fabric (:meth:`fabric_tool.model.Fabric.shortest_paths`)
-on both function classes. SIRCL's lanes (``model.derive_routes``) are a
+on both function classes. The lanes (``model.derive_routes``) are a
 subset: lane 0 is the primary function and lane 1 the secondary function of
 one of these paths. On a path of Sparks both sets are equal. On a cycle of
 even size the plan also carries the other function class of each opposite
 pair's two paths, which makes the whole-cycle plan the universal relay table:
 every Spark reaches all four addresses of every Spark it shares no cable
 with. Every lane of ``model.derive_routes`` is checked to be carried, so this
-plan and SIRCL's route maps cannot disagree.
+plan and the route maps cannot disagree.
 
 Objects, for a carried path with ``h >= 2`` hops from ``a`` to ``b`` on
 function class ``c``:
@@ -38,10 +35,8 @@ Measured constraints that the plan states and applies:
 
 - a relay's hardware hairpin queue holds 512 KiB, the device maximum, and
   cannot pause its sender, so frames beyond it are dropped. The plan lists
-  the SIRCL lanes through every queue, the relay load factor ``f`` and the
+  the lanes through every queue, the relay load factor ``f`` and the
   per-peer op bound ``0.75 * 512 KiB / f``;
-- relay egress through the sibling Socket Direct function of the egress port
-  lowered burst loss to 0.06 % at 2 MiB (SparkRing's layout measurements);
 - queue pairs use flow label 0 and tags are chosen by destination address,
   never by UDP port: the sender NIC computes the ICRC after the RDMA-TX
   rewrite, so a rewritten UDP field would be covered by the ICRC and could
@@ -80,7 +75,7 @@ FILTER_PREF_BASE = 10
 RESERVED_PREFS = range(FILTER_PREF_BASE + 1, FILTER_PREF_BASE + MAX_TAG + 1)
 HAIRPIN_QUEUE_BYTES = model.DEFAULT_HAIRPIN_QUEUE
 RELAY_QUEUE_SHARE = model.RELAY_QUEUE_SHARE
-PLAN_SCHEMA = "fabric-tool-plan/v1"
+PLAN_SCHEMA = "fabric-tool-plan/v2"
 _MAC = re.compile(r"^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$")
 
 
@@ -238,13 +233,13 @@ class OriginRoute:
     relays: tuple[int, ...]
     cables: tuple[str, ...]              # cables crossed, in the direction of travel
     owned_cables: tuple[str, ...]        # the same cables in canonical spelling
-    lanes: tuple[str, ...] = ()          # SIRCL lanes it carries: "rank r->p lane l"
+    lanes: tuple[str, ...] = ()          # lanes it carries: "rank r->p lane l"
 
     def to_json(self) -> dict[str, object]:
         return {"destination": self.destination, "netdev": self.netdev, "device": self.device,
                 "source": self.source, "next_mac": self.next_mac, "tag": f"0x{self.tag:04x}", "peer": self.peer,
                 "peer_netdev": self.peer_netdev, "hops": self.hops, "relays": list(self.relays),
-                "cables": list(self.cables), "sircl_lanes": list(self.lanes)}
+                "cables": list(self.cables), "lanes": list(self.lanes)}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -342,7 +337,7 @@ class HostPlan:
 
 @dataclasses.dataclass(frozen=True)
 class RelayQueue:
-    """One hairpin queue of a relay (ingress device to egress device) and the SIRCL lanes through it."""
+    """One hairpin queue of a relay (ingress device to egress device) and the lanes through it."""
 
     position: int
     in_netdev: str
@@ -384,7 +379,7 @@ class GroupPlan:
             "relay_egress": self.relay_egress, "max_relays": self.max_relays, "digest": self.digest,
             "route_maps": [self.sircl.route_text(rank) for rank in range(self.sircl.world)],
             "relay_queues": [{"position": queue.position, "in": queue.in_netdev, "out": queue.out_netdev,
-                              "sircl_lanes": list(queue.lanes)} for queue in self.queues],
+                              "lanes": list(queue.lanes)} for queue in self.queues],
             "busiest_queue_lanes": self.busiest_queue, "load_factor": self.load_factor,
             "per_peer_bytes": self.per_peer_bytes, "hosts": [host.to_json() for host in self.hosts],
         }
@@ -393,8 +388,7 @@ class GroupPlan:
 CONSTRAINTS = (
     "relay hairpin queue: 512 KiB per (relay, ingress device, egress device), the device maximum; it cannot "
     "pause its sender, so frames beyond it are dropped",
-    "relay egress: sibling Socket Direct function of the egress port lowered burst loss to 0.06 % at 2 MiB; "
-    "a whole-cycle layout keeps same-function egress",
+    "relay egress: sibling function on paths; same-function egress on a full ring",
     "queue pairs use flow label 0",
     "tags are EtherTypes chosen by destination address, never by UDP port (the sender NIC computes the ICRC "
     "after the RDMA-TX rewrite)",
@@ -444,8 +438,7 @@ def _carry(path: tuple[model.Step, ...], secondary: bool, facts: Facts, relay_eg
 
 
 def _digest(label: str, relay_egress: str, hosts: Sequence[HostPlan]) -> str:
-    # The payload is SparkRing's installer's (its key is "sparks"), so the same
-    # layout and facts digest alike on both tools.
+    # Hash the canonical installed objects and group metadata.
     canonical = json.dumps({"group": label, "relay_egress": relay_egress,
                             "sparks": [host.to_json() for host in hosts]}, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
@@ -472,7 +465,7 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
                 if len(path) - 1 > max_relays:
                     raise FabricError(
                         f"group {group.label}: host {target} is {len(path)} cables from host {origin}, "
-                        f"{len(path) - 1} relays; the qualified limit is {max_relays} ("
+                        f"{len(path) - 1} relays; the configured limit is {max_relays} ("
                         "--max-relays raises it, research-only)")
                 for secondary in (False, True):
                     _carry(path, secondary, facts, relay_egress, routes_at, filters_at, group.label)
@@ -488,7 +481,7 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
                 route = routes_at[origin].get(destination)
                 if (route is None or route.netdev != lane.local.netdev or route.cables != lane.cables
                         or route.tag != tag(len(lane.relays))):
-                    raise FabricError(f"group {group.label}: SIRCL lane {lane.lane} from rank {rank} to rank {peer} "
+                    raise FabricError(f"group {group.label}: lane {lane.lane} from rank {rank} to rank {peer} "
                                       f"({lane.local.device}, {lane.cables}) is not carried by the relay plan")
                 lanes_of.setdefault((origin, destination), []).append(f"rank {rank}->{peer} lane {lane.lane}")
     hosts = []
@@ -621,7 +614,7 @@ def isolation_problems(plans: Sequence[GroupPlan]) -> list[str]:
 def render_text(plan: GroupPlan, facts: Facts, *, details: bool = True) -> str:
     group = plan.group
     lines = [f"layout {group.name} on {len(group.members)} host(s) cabled as "
-             f"{'a cycle' if group.whole_ring else 'a path'}: group {group.label}, relay egress "
+             f"{'a ring' if group.whole_ring else 'a path'}: group {group.label}, relay egress "
              f"{plan.relay_egress}"
              + (" (symbolic facts: placeholders stand for addresses and MACs)" if facts.symbolic else "")]
     for note in CONSTRAINTS:
@@ -634,22 +627,22 @@ def render_text(plan: GroupPlan, facts: Facts, *, details: bool = True) -> str:
     if plan.per_peer_bytes is None:
         lines.append("  relay queues: none (no lane crosses a relay)")
     else:
-        lines.append(f"  relay queues: busiest {plan.busiest_queue} SIRCL lanes, load factor "
+        lines.append(f"  relay queues: busiest {plan.busiest_queue} lanes, load factor "
                      f"{plan.load_factor:g}; keep per-peer op sizes at or below {plan.per_peer_bytes} bytes "
                      f"({RELAY_QUEUE_SHARE:.0%} of {HAIRPIN_QUEUE_BYTES >> 10} KiB / {plan.load_factor:g})")
     for rank in range(plan.sircl.world):
         lines.append(f"  rank {rank} (position {plan.layout.positions[rank]}): "
-                     f"SIRCL_PEER_ROUTES={plan.sircl.route_text(rank)}")
+                     f"NET_SIRCL_ROUTES={plan.sircl.route_text(rank)}")
     if not details:
         return "\n".join(lines)
     for queue in plan.queues:
         lines.append(f"  queue {facts.name(queue.position)} {queue.in_netdev} -> {queue.out_netdev}: "
-                     f"{len(queue.lanes)} SIRCL lanes")
+                     f"{len(queue.lanes)} lanes")
     for host in plan.hosts:
         lines.append(f"  {host.name} (position {host.position}): {len(host.routes)} routes, "
                      f"{len(host.filters)} relay filters, {len(host.markers)} markers")
         for route in host.routes:
-            carried = f"; {', '.join(route.lanes)}" if route.lanes else "; not a SIRCL lane"
+            carried = f"; {', '.join(route.lanes)}" if route.lanes else "; not a lane"
             lines.append(f"    route {route.destination}/32 dev {route.netdev} src {route.source} neighbour "
                          f"{route.next_mac} -> {facts.name(route.peer)} {route.peer_netdev}, {route.hops} hops "
                          f"through {list(route.relays)}, tag 0x{route.tag:04x}{carried}")

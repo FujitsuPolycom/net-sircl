@@ -26,7 +26,7 @@ clean:
 	rm -rf $(BUILD)
 .PHONY: all check clean
 
-# Source identity is separate from pristine SIRCL proxy and kernel-pack identities.
-$(BUILD)/core_identity.h: $(wildcard ./src/*.c) $(wildcard ./include/*.h) $(wildcard ./include/sircl_core/*) $(wildcard ./tools/*.py) ./PROXY_INPUTS.json ./VERSION
+# The source digest covers transport-core sources, headers and tools, not the compiled library.
+$(BUILD)/core_identity.h: $(wildcard ./src/*.c) $(wildcard ./include/*.h) $(wildcard ./include/sircl_core/*) $(wildcard ./tools/*.py) ./VERSION
 	$(PYTHON) ./tools/identity.py --output $@
 $(OBJECTS) $(BUILD)/verbs_dl.o $(BUILD)/test_verbs: $(BUILD)/core_identity.h

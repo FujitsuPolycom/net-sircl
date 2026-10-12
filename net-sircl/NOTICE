@@ -1,46 +1,31 @@
-net-sircl, an NCCL network plugin for DGX Spark cabling
+net-sircl, an NCCL network plugin for directly cabled DGX Sparks
 Copyright 2026 SparkRing contributors
+Licensed under the Apache License, Version 2.0. See LICENSE.
 
-This product is licensed under the Apache License, Version 2.0 (see LICENSE).
-
-NCCL source
------------
-nccl/ holds NVIDIA NCCL's network-plugin headers, copied unchanged (byte-identical) from NVIDIA NCCL tag
-v2.32.3-1, plugins/net/example/nccl/: common.h, err.h, gin_v11.h, net.h, net_device.h, net_v2.h, net_v3.h,
-net_v4.h, net_v5.h, net_v6.h, net_v7.h, net_v8.h, net_v9.h, net_v10.h, net_v11.h, net_v12.h and types.h.
-Copyright (c) 2017-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. They are licensed under the
-Apache License, Version 2.0; NCCL's licence text is in nccl/LICENSE.txt.
-
-No NCCL source is copied into net_sircl.c. These NCCL v2.32.3-1 sources were read for NCCL's behaviour and not
-adapted: src/transport/net_ib/connect.cc, p2p.cc, init.cc, reg.cc and gdr.cc; src/transport/net.cc;
-src/graph/topo.cc; src/init.cc.
-
-SIRCL and RoCEnante
+NVIDIA NCCL headers
 -------------------
-net-sircl follows the transport design of SparkRing's SIRCL ring sessions (sparkring-sircl), which derive from
-RoCEnante, the b12x one-shot RoCE collectives (b12x/comm/roce), by Local Inference Lab
-(https://github.com/local-inference-lab) and its contributors, including Luke Alonso (lukealonso), licensed
-under the Apache License, Version 2.0. RoCEnante was written by Jason (original-el8) in
-local-inference-lab/b12x PR 295, with dual-rail striping and graph-collective work by Luke Alonso
-(lukealonso). b12x is developed inside FlashInfer at flashinfer/experimental/b12x.
+Copyright (c) 2017-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+net-sircl/nccl/ (relative to the repository root) contains unmodified
+network-plugin headers from NVIDIA NCCL v2.32.3-1, plugins/net/example/nccl/:
+common.h, err.h, gin_v11.h, net.h, net_device.h, net_v2.h through net_v12.h,
+and types.h. Their individual notices remain; the Apache-2.0 license text
+is in net-sircl/nccl/LICENSE.txt.
 
-What net-sircl takes from that design: one-sided RDMA writes ordered on one queue pair and closed by 4-byte
-flag words; the use of both PCI functions of a cable as two lanes (dual rail); and a cap on the bytes in
-flight toward a peer reached through relays. Its route derivation follows SIRCL's route planner
-(sparkring_sircl/routes.py, derive_lanes), written again in C. No RoCEnante or SIRCL source file is copied
-into net_sircl.c.
+No NCCL source is copied into net-sircl/net_sircl.c. NCCL v2.32.3-1 sources
+read for behavior, without adaptation: src/transport/net_ib/connect.cc,
+p2p.cc, init.cc, reg.cc and gdr.cc; src/transport/net.cc; src/graph/topo.cc;
+src/init.cc.
 
-Test infrastructure
--------------------
-tests/standin/ contains compatibility includes into transport-core, which owns
-SparkRing's shared-memory verbs provider. Retain transport-core/LICENSE,
-transport-core/NOTICE and transport-core/PROVENANCE.json in a standalone package.
-The provider is test infrastructure and is not linked into the real-NIC plugin.
+RoCEnante attribution
+---------------------
+Includes transport design derived from RoCEnante, the b12x RoCE collectives
+from Local Inference Lab (https://github.com/local-inference-lab), licensed
+under Apache-2.0. RoCEnante was written by Jason (original-el8) in
+local-inference-lab/b12x PR 295, with dual-rail striping and graph-collective
+work by Luke Alonso (lukealonso). b12x is developed in FlashInfer at
+flashinfer/experimental/b12x.
 
-Shared transport extraction
----------------------------
-Device metadata, topology derivation, RC queue-pair setup, registration,
-posting/completion primitives and window arithmetic use transport-core 0.1.0.
-The ext-net API, CTS protocol, registration policy and progress scheduling remain
-owned by net-sircl. Hardware measurements for the shared-core source a4de4dd5 are summarized in
-../docs/measurements.md, with scope and conditions. They are not performance guarantees.
+The plugin's transport design and C route derivation follow the originating
+project's collective library. No RoCEnante source file is copied into
+net-sircl/net_sircl.c. net-sircl/tests/standin/ includes transport-core's
+shared-memory RDMA emulator, used by tests rather than the real-NIC plugin.

@@ -1,7 +1,6 @@
 """Text reports of the tool: installed state per host, and comparisons with the plan.
 
-Absorbed from ``sparkring_sircl.fabric.report`` (SparkRing
-``spark_transport/sircl/sparkring_sircl/fabric/report.py``); see NOTICE.
+Derived from the SparkRing relay installer; see NOTICE.
 ``status`` labels every relay object with its owner: the group named in the
 host's record for objects that carry the tool's marks (protocol 82, reserved
 filter preferences, marker processes), ``no record`` when they carry the marks
@@ -51,7 +50,7 @@ def render_show(states: Mapping[int, HostState], marker: commands.MarkerConfig) 
             owner = "no record"
             heading = "no group record"
         if state.sparkring_record is not None:
-            heading += f"; SparkRing's table is installed ({commands.SPARKRING_RECORD_PATH})"
+            heading += f"; SparkRing's table is installed ({commands.SPARKRING_RECORD_PATH}); see docs/fabric.md, Ownership"
         lines.append(f"{state.name} (position {position}, {state.ssh}): {heading}")
         if state.hostname != state.name:
             lines.append(f"  host name: {state.hostname or 'unknown'} (the topology lists {state.name})")
@@ -147,7 +146,7 @@ def render_outcome(outcome: Outcome, *, verbose: bool = False, scripts: bool = F
     if outcome.plan is not None:
         plan = outcome.plan
         bound = (f"per-peer op sizes at or below {plan.per_peer_bytes} bytes (busiest relay queue "
-                 f"{plan.busiest_queue} SIRCL lanes, load factor {plan.load_factor:g})"
+                 f"{plan.busiest_queue} lanes, load factor {plan.load_factor:g})"
                  if plan.per_peer_bytes else "no relayed lanes")
         lines.append(f"plan {plan.digest}; {bound}")
     for diff in outcome.diffs:

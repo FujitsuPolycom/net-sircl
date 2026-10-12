@@ -1,7 +1,6 @@
 """Shell commands the tool sends to a host.
 
-Absorbed from ``sparkring_sircl.fabric.commands`` (SparkRing
-``spark_transport/sircl/sparkring_sircl/fabric/commands.py``); see NOTICE.
+Derived from the SparkRing relay installer; see NOTICE.
 Every remote action is one ``bash -s`` script over SSH in batch mode (or the
 same script run locally through ``bash -s``), one command per line, every
 interpolated value shell-quoted. The read script (:func:`read_script`) uses
@@ -49,7 +48,7 @@ STATE_DIR = "/run/fabric-table"
 RECORD_PATH = f"{STATE_DIR}/relay-state.json"
 RECORD_SCHEMA = "fabric-table-record/v1"
 SPARKRING_RECORD_PATH = "/run/sparkring-fabric/relay-state.json"
-DEFAULT_MARKER = "/var/tmp/ring8-mesh-marker"
+DEFAULT_MARKER = "/var/tmp/fabric-tool-marker"
 SECTION = "@@"
 HEADER = "set -euo pipefail"
 SETTLE = "sleep 1.5"
@@ -146,8 +145,7 @@ def read_script(marker: MarkerConfig) -> str:
 def route_get_script(destinations: Iterable[str]) -> str:
     """``ip -o route get`` of every destination (read-only), as ``@@route:<address>`` blocks.
 
-    The tool's verify resolves lane destinations the same way SparkRing's
-    installer, ring harness and vLLM launcher check them.
+    Verify resolves the IP route for every lane destination.
     """
     lines = ["set -u"]
     for destination in destinations:

@@ -49,8 +49,8 @@ clean:
 
 .PHONY: all emu check install clean
 
-# Source identity is separate from pristine SIRCL proxy and kernel-pack identities.
-.core-build/core_identity.h: $(wildcard $(CORE)/src/*.c) $(wildcard $(CORE)/include/*.h) $(wildcard $(CORE)/include/sircl_core/*) $(wildcard $(CORE)/tools/*.py) $(CORE)/PROXY_INPUTS.json $(CORE)/VERSION
+# The source digest covers transport-core sources, headers and tools, not the compiled library.
+.core-build/core_identity.h: $(wildcard $(CORE)/src/*.c) $(wildcard $(CORE)/include/*.h) $(wildcard $(CORE)/include/sircl_core/*) $(wildcard $(CORE)/tools/*.py) $(CORE)/VERSION
 	$(PYTHON) $(CORE)/tools/identity.py --output $@
 libnccl-net-sircl.so libnccl-net-sircl-emu.so: .core-build/core_identity.h
 

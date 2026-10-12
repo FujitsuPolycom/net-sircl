@@ -1,34 +1,51 @@
 # net-sircl
 
-Run unmodified NVIDIA NCCL on directly cabled NVIDIA DGX Sparks, including paths
-whose end peers communicate through hardware relays. `net-sircl` is an NCCL
-`ext-net` plugin: NCCL keeps its algorithms and CUDA-graph support; the plugin
-selects a route per peer, uses both PCI functions of each cable, and limits bytes
-in flight toward relayed peers. Version **0.1.0**, wire version **2**.
+net-sircl is for people running NVIDIA NCCL applications across two or more
+NVIDIA DGX Sparks connected directly by QSFP cables, without a network switch.
+It supplies RDMA connections through NCCL's network-plugin (`ext-net`) interface.
+NCCL keeps its collective algorithms and CUDA-graph support. PyTorch and other
+NCCL users can load the plugin without a framework patch.
 
-Install one library and describe the cabling in a topology file. No SparkRing
-Python package is needed for the plugin. A topology file describes an already
-configured RoCE fabric; it does not configure interfaces, routes or relay tables.
+The name comes from SIRCL, a library for collective communication over RDMA in
+the SparkRing project, where this transport was developed.
+Version **0.1.0**, connection protocol (wire version) **2**: every host in a job
+must use a plugin with the same wire version.
 
-## Supported layouts
+## Requirements
 
-| Layout | Plugin status on DGX Spark GB10 | Relay table |
-|---|---|---|
-| Pair, one cable | Measured with NCCL 2.32.3 | No |
-| Ring of eight | Measured with NCCL 2.32.3 and `NCCL_ALGO=Ring` | No, when communicating ring neighbours are directly cabled |
-| Ring of four | Routes covered by CPU tests; no hardware run yet | Same condition as ring of eight |
-| Path of four | Measured with NCCL 2.32.3 and `NCCL_ALGO=Ring` | Required on intermediate Sparks, with endpoint routes |
-| Other ring/path sizes or subsets | Topology parser supports up to 64 hosts; not hardware-qualified | Required whenever a communicating pair is not directly cabled |
+- Two or more DGX Sparks with ConnectX-7 NICs and direct QSFP cabling; one GPU
+  and one rank per host. Hardware results cover a pair, a ring of eight and a
+  path of four. This release is research-only.
+- Linux with working NVIDIA drivers and RoCE v2 networking. No minimum DGX OS
+  version is established by this repository's evidence.
+- NCCL **2.32.3**, the tested runtime, with the v12 network-plugin API.
+- A C11 compiler, Make, Python 3.10 or later, and rdma-core development headers.
+  CPU tests also need pytest. CUDA-enabled PyTorch runs the example below.
+- IPv4 addresses on the cabled RDMA interfaces and a reachable IP network for
+  process startup. The topology file describes configured networking; it does
+  not assign addresses, routes or relays.
 
-Stock NCCL 2.32.3 already runs on the measured pair and full ring of eight with
-cuMem enabled. The plugin helps most on paths: stock NCCL connected the measured
-path of four, but relayed all-reduce and all-gather failed their time limits.
-See [measurements](docs/measurements.md) for conditions and exceptions.
+## Four terms
+
+- **PCI function:** a separately exposed part of the NIC. Each Spark QSFP port
+  has two RDMA devices: `rocep1s0f0` and `roceP2p1s0f0` on port 0,
+  `rocep1s0f1` and `roceP2p1s0f1` on port 1. They use the NIC's two PCIe links.
+- **Lane:** one of the two parallel connections the plugin uses across a
+  cable, one per PCI function.
+- **Relay:** an intermediate Spark that forwards traffic between its NIC
+  ports so hosts without a shared cable can communicate.
+- **Relay window:** a cap on bytes in flight toward a peer reached through
+  relays. The NIC forwarding queue holds 512 KiB and cannot slow its sender;
+  the default window is 393216 bytes per local function and peer.
+
+| Cabling and communication | What to configure |
+|---|---|
+| Pair, or full ring with traffic only between cabled neighbours | Plugin and topology file |
+| Path, or ring with traffic between non-neighbours | Plugin, topology file and relays installed with fabric-tool |
 
 ## Build and install
 
-On Linux, install a C11 compiler, Make, Python 3 and rdma-core development headers.
-For Ubuntu:
+On Ubuntu:
 
 ```sh
 sudo apt-get install build-essential python3 python3-pytest libibverbs-dev
@@ -37,19 +54,21 @@ make check
 sudo make install PREFIX=/opt/net-sircl
 ```
 
-Build on each target architecture (aarch64 on Spark, x86_64 for workstation tests).
-The NCCL plugin headers are included; building requires neither CUDA nor an NCCL
-source checkout. Running requires compatible NCCL: **2.32.3 is the tested version**,
-using the v12 network-plugin API. The production library is
-`/opt/net-sircl/lib/libnccl-net-sircl.so`.
-The same install provides `/opt/net-sircl/bin/fabric-tool`. Its Python runtime
-uses only the standard library; pytest is needed for its CPU tests. `make` also
-compiles the relay marker to check the rdma-core build dependencies.
+Build for each target architecture: aarch64 on Spark, x86_64 for workstation
+tests. Vendored NCCL headers let the build run without CUDA or NCCL installed.
+NCCL loads `/opt/net-sircl/lib/libnccl-net-sircl.so`. The install also provides
+`/opt/net-sircl/bin/fabric-tool`. `make` compiles its marker program,
+`fabric-tool/mesh_marker.c`, which tags outgoing RDMA packets for relaying.
+`make emu` builds a separate test library that never touches a NIC.
 
 ## Pair quickstart
 
-1. Cable host 0's port 0 to host 1's port 1. Each cabled function needs an IPv4
-   RoCE v2 GID. Both hosts also need a mutually reachable bootstrap IP network.
+1. Cable host 0's port 0 to host 1's port 1. Port 0 has RDMA functions
+   `rocep1s0f0` and `roceP2p1s0f0`; port 1 has `rocep1s0f1` and `roceP2p1s0f1`.
+   Use `rdma link show` to identify their network interfaces and link state.
+   Assign an IPv4 address to each cabled function's interface; RoCE v2 derives
+   its RDMA address (GID) from that address. Both hosts also need a mutually
+   reachable bootstrap IP network.
 2. Copy [examples/pair.topology](examples/pair.topology) to
    `/etc/net-sircl.topology` on both hosts. Replace `node-0 node-1` with the names
    returned by `hostname`. This is the only plugin routing configuration.
@@ -69,150 +88,89 @@ torchrun --nnodes=2 --nproc-per-node=1 --node-rank=RANK \
   --master-addr=MASTER_HOST --master-port=29500 examples/all_reduce.py
 ```
 
-The bootstrap settings are ordinary NCCL/torchrun launch settings, not per-peer
-route or window maps. Use a single plain interface name for `NCCL_SOCKET_IFNAME`;
-the plugin does not parse NCCL's `=`, `^` or comma-list syntax. If needed, set
+These are ordinary NCCL and torchrun settings. Set `NCCL_SOCKET_IFNAME` to one
+interface name or name prefix. The plugin advertises the first IPv4 address of
+the first matching interface to its peers. It does not parse NCCL's `^`
+(exclude), `=` (exact match) or comma-list forms. If you need those forms, set
 `NET_SIRCL_OOB_ADDR` to this host's reachable IPv4 address instead.
 
-Expect `Loaded net plugin sircl (v12)`, `Using network sircl`,
-`net-sircl 0.1.0 (wire version 2)` and a `transport-core 0.1.0 ABI 1 source ...`
-line. Every rank prints `PASS`. All ranks must use the same wire version.
+Expect `Loaded net plugin sircl (v12)`, `Using network sircl` and
+`net-sircl 0.1.0 (wire version 2)`. Every rank prints `PASS`. A further line,
+`net-sircl transport-core 0.1.0 ABI 1 source <sha256>`, identifies the bundled
+RDMA library's source files; see [source identity](docs/testing.md#source-identity).
 
 ## Rings and paths
 
 Use [ring4.topology](examples/ring4.topology),
-[ring8.topology](examples/ring8.topology) or
-[path4.topology](examples/path4.topology). Replace the host names on every rank.
-Position `i`'s port 0 connects to position `i+1`'s port 1. Rings add the last-to-first
-cable. Paths do not. Set `NCCL_ALGO=Ring`, launch one rank per host in cable order,
-and change `--nnodes` and `--node-rank` accordingly.
+[ring8.topology](examples/ring8.topology) or [path4.topology](examples/path4.topology).
+List hosts in cable order. A host's *position* is its zero-based index on the
+`hosts` line. Position i's port 0 connects to position i+1's port 1. Rings add
+the last-to-first cable; paths do not. Set `NCCL_ALGO=Ring`, launch one rank per
+host in cable order, and adjust `--nnodes` and `--node-rank`.
 
-**Install the relay table before launching NCCL on a path**, or whenever ring
-peers communicate beyond a direct cable. The bundled [fabric-tool](fabric-tool/README.md)
-uses the same topology file to install endpoint routes, ConnectX-7 forwarding
-rules and RDMA transmit markers. No SparkRing Python package is required.
-Interfaces must already have their fabric addresses configured.
+Ring-of-four route derivation is CPU-tested but has not run on hardware.
+Other sizes and subsets are unsupported for hardware use, although the parser
+accepts up to 64 hosts. See [configuration](docs/configuration.md).
 
-From this repository, on a Linux workstation with SSH access to every host:
+## Peers beyond a cable
 
-```sh
-cd fabric-tool
-topology=/absolute/path/to/path4.topology
-python3 -m fabric_tool --topology "$topology"   # default: offline plan
-# Replace names with topology host names and USER@HOST_* with SSH targets.
-fabric() {
-  python3 -m fabric_tool "$@" --topology "$topology" \
-    --ssh node-0=USER@HOST_0 --ssh node-1=USER@HOST_1 \
-    --ssh node-2=USER@HOST_2 --ssh node-3=USER@HOST_3
-}
-fabric facts --output facts.json
-fabric install-marker --scripts                # preview marker build
-fabric install-marker --execute
-fabric apply --facts facts.json                 # preview reconciliation
-fabric apply --facts facts.json --execute
-fabric verify --facts facts.json
-```
+**Configure relays before launching NCCL on a path**, or on a ring whose
+communicating peers are not neighbours. Every intermediate Spark needs NIC
+forwarding rules. Senders need IP routes toward the far host through the first
+relay, and a marker program that tags packets with the remaining relay count.
+The bundled fabric-tool derives these from the topology file and installs them.
+Follow [fabric setup](docs/fabric.md) for facts collection, marker installation,
+apply, verification, ownership and boot restoration.
 
-Host-changing commands are dry runs unless `--execute` is present. The SSH
-account needs noninteractive sudo; marker builds need the build dependencies
-above on each Spark. Match every topology name to `hostname` and supply every
-host. `verify` must exit zero before launching NCCL.
-
-For boot persistence, install this repository on each Spark and copy the same
-topology and complete `facts.json` there. Run locally on **each Spark**:
-
-```sh
-sudo /opt/net-sircl/bin/fabric-tool install-boot \
-  --topology /etc/net-sircl.topology --facts /absolute/path/to/facts.json
-sudo /opt/net-sircl/bin/fabric-tool install-boot \
-  --topology /etc/net-sircl.topology --facts /absolute/path/to/facts.json --execute
-```
-
-This enables `fabric-table.service`, copies the tool and inputs to persistent
-locations, and applies the table now. The unit restores missing state at boot.
-See [fabric setup](docs/fabric.md) for ownership conflicts, verification and removal.
-
-**Status: equivalence-tested against SparkRing's planner on CPU; hardware test
-pending.** Tests compare routes, filters, marker rules and command strings for
-rings of four/eight and paths of three/four. Earlier plugin hardware measurements
-used SparkRing-installed tables; they do not qualify this installer or its boot unit.
-
-Topology syntax, default function names, overrides and window semantics are in
-[configuration](docs/configuration.md).
-
-## PyTorch and CUDA graphs
-
-DDP and `torch.distributed` use the plugin through NCCL without a framework patch.
-Check the NCCL INIT log for the library actually loaded; PyTorch's compiled-against
-version may differ from a preloaded NCCL library.
-
-Delete **all captured graphs referencing the communicator** before teardown:
-
-```python
-del graph  # also release any other references to captured graphs
-torch.cuda.synchronize()
-torch.distributed.destroy_process_group()
-```
-
-NCCL waits for graph references during communicator destruction. Keeping them
-alive can hang teardown with either this plugin or NCCL's socket transport.
-The [emulated test](net-sircl/tests/emulation/nccl_e2e.py) demonstrates the order.
-
-## Measured results
-
-Research-only measurements on DGX Spark GB10, unpatched NVIDIA NCCL 2.32.3,
-nccl-tests v2.21.1, bfloat16, 256 MiB out-of-place bus bandwidth:
-
-| Layout and condition | Shared-core plugin at `a4de4dd5` | Comparison |
-|---|---|---|
-| Pair, eager all-reduce, 64 channels | 21.51 GB/s | Stock 20.62 GB/s in the same session |
-| Ring of eight, Ring algorithm, 4 channels, eager all-reduce | 23.95 GB/s | RC `7b81b968`: 23.95 GB/s |
-| Path of four, Ring algorithm, 4 channels, two relays on closing pair | 17.67 GB/s eager; 17.73 with `-G 20` | RC: 17.70 / 17.67 GB/s in that session |
-
-Every tested collective line was exact. Across these layouts, candidate/RC
-ratios at 256 MiB were 0.986–1.003. An earlier RC path measurement was 17.74 GB/s;
-the RC pair reached at least 90% of stock on 35 of 36 rows from 8–256 MiB.
-These are measurements, not throughput guarantees or serving qualification.
-See [measurement conditions and provenance](docs/measurements.md).
-
-## Limitations and open items
-
-- No ring-of-four hardware run. Other GPU/NIC models, switches and multiple GPUs
-  per host are not qualified. GPU Direct RDMA, DMA-BUF and grouped receives are
-  not supported; this plugin stages through host memory.
-- Tree/PAT connections on paths are not qualified; use Ring. A full physical ring
-  only avoids relays when NCCL's communicating neighbours follow its cables.
-- Several senders sharing a relay queue need an externally planned aggregate
-  budget. Automatic windows cap each local (function, peer), not every host's
-  combined traffic. Do not assume arbitrary all-to-all traffic is admitted.
-- The relaxed-ordering-off comparison has not been run.
-- Pair 8 MiB eager all-reduce was weaker in one RC run (0.82 of stock) and near
-  parity in another (0.98). The six-run-per-variant graph rerun found no lower
-  candidate row under its predeclared rule; that does not resolve every eager
-  performance question.
-- The release stamp and packaging have local validation. Hardware evidence is
-  for the source revisions named above, not a newly measured 0.1.0 binary.
+fabric-tool is implemented and CPU-tested, research-only, and has not run on
+hardware. The plugin measurements used a different relay installer from the
+SparkRing project; they do not qualify fabric-tool or its boot unit.
 
 ## Troubleshooting
 
 | Symptom | Action |
 |---|---|
-| Plugin missing / wrong network | Check library path, dependencies with `ldd`, `NCCL_NET=sircl`, and the INIT log |
-| No active RoCE device / no IPv4 GID | Check link state, IPv4 addresses, rdma-core and any `NET_SIRCL_HCA` filter |
-| Host absent from topology | Match `hostname` exactly or set `NET_SIRCL_POSITION` to the file's zero-based position |
-| `no route from ... to ...` | Check endpoint routes, cabling and relay setup |
-| Queue pair RTR fails | Check GID selection and relay tables on intermediate hosts |
-| Connect timeout | Check every rank is running and bootstrap/OOB IPv4 addresses are reachable; unset interface-selection prefixes |
-| Millisecond delays on a path | Verify the log selects `sircl`; stock IB transport did not sustain the measured relayed path |
-| Teardown hangs after graph capture | Release captured graphs before `destroy_process_group()` |
+| Plugin missing or wrong network | Check the library path, `ldd`, `NCCL_NET=sircl` and the INIT log |
+| No active RoCE device or IPv4 GID | Check link state, IPv4 addresses, rdma-core and `NET_SIRCL_HCA` |
+| Host absent from topology | Match `hostname` or set `NET_SIRCL_POSITION` to its zero-based position |
+| `no route from ... to ...` | Check cabling, sender IP routes and [relay setup](#peers-beyond-a-cable) |
+| `queue pair to RTR on ... failed` (connection could not reach peer) | Check GIDs and relays on intermediate hosts |
+| Connect timeout | Start every rank, check bootstrap IPv4 reachability, remove leading `^` or `=` from `NCCL_SOCKET_IFNAME`, or set `NET_SIRCL_OOB_ADDR` |
+| Millisecond delays on a path | Check for `Using network sircl`; stock NCCL's IB transport moved relayed traffic at about 0.5 MB/s in testing |
+| Teardown hangs after graph capture | Release every captured graph before `destroy_process_group()`; see [configuration](docs/configuration.md#pytorch-and-cuda-graphs) |
 
-## Tests, packaging and licensing
+## Plugin versus stock NCCL
 
-`make check` runs CPU transport, topology and fabric-tool tests. `make check-e2e` runs real
-NCCL through emulated verbs on one CUDA GPU, in plain and windowed modes.
-`make package` creates `dist/net-sircl-0.1.0.tar.gz` with all three source directories
-and this repository's release files. See [testing and CI](docs/testing.md),
-[release notes](docs/release-0.1.0.md) and [source provenance](SOURCE.json).
+Research-only results on DGX Spark GB10: NCCL 2.32.3, nccl-tests v2.21.1,
+bfloat16, one rank/GPU per host, both cable functions, relaxed ordering on.
+Values are 256 MiB out-of-place all-reduce bus bandwidth.
 
-Apache-2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE), including RoCEnante and
-NVIDIA NCCL and SparkRing fabric-tool attributions. All vendored NVIDIA header notices are retained.
+| Layout and condition | net-sircl | Stock NCCL (own IB transport) |
+|---|---|---|
+| Pair, eager, 64 channels | 21.51 GB/s | 20.62 GB/s, same session |
+| Ring of eight, Ring, 4 channels, eager | 23.95 GB/s | 23.77 GB/s with cuMem enabled; separate session and NCCL build |
+| Path of four, Ring, 4 channels, two relays between end hosts | 17.67 GB/s eager; 17.73 GB/s CUDA graph | All-reduce and all-gather did not finish within 75 s; separate session and NCCL build |
+
+Every tested plugin collective returned exact results. The measured builds
+used the same transport C/header bytes as this release, with a different
+version string. The 0.1.0 library itself has not run on Sparks.
+See [conditions, limitations and reproduction](docs/measurements.md).
+
+## Limitations
+
+The plugin stages data through host memory. GPU Direct RDMA, DMA-BUF and
+grouped receives are unsupported. Other GPU/NIC models, switches, multiple GPUs
+per host, and Tree/PAT connections on paths are not qualified; use Ring.
+
+Several processes or hosts sending through one relay at once are unsupported.
+The window limits one process's traffic through one local function toward one
+peer, not several senders' combined traffic. All-to-all traffic can overrun
+the forwarding queue. Performance with `NET_SIRCL_RELAXED_ORDERING=0` and
+small-message performance are not characterised.
+
+See [testing and CI](docs/testing.md), [release notes](docs/release-0.1.0.md)
+and [source provenance](SOURCE.json). `make help` lists build and test targets.
+
+Apache-2.0: [LICENSE](LICENSE) and [NOTICE](NOTICE) retain attribution to
+RoCEnante (Local Inference Lab's RDMA collectives), NVIDIA NCCL (plugin headers)
+and SparkRing (the project where these components were developed).

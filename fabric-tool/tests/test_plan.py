@@ -42,6 +42,9 @@ def test_whole_cycle_universal_table(size):
     built = plan_mod.build_plan(group, facts)
     assert built.group.label == f"cycle:{'-'.join(str(i) for i in range(size))}"
     assert built.relay_egress == "same"
+    document = built.to_json()
+    for queue in document["relay_queues"]:
+        assert "lanes" in queue and "sircl_lanes" not in queue
     routes = sum(len(host.routes) for host in built.hosts)
     filters = sum(len(host.filters) for host in built.hosts)
     # Every rank routes both addresses of every peer at distance 2..size/2 on both classes: the universal
@@ -99,7 +102,7 @@ def test_tags_preferences_and_trace():
 def test_isolation_and_relay_limit():
     group = topology.parse("hosts h0 h1 h2 h3\ncabling ring\n").group
     facts = _facts([f"h{i}" for i in range(4)], _ring_addresses(4))
-    with pytest.raises(FabricError, match="qualified limit"):
+    with pytest.raises(FabricError, match="configured limit"):
         plan_mod.build_plan(group, facts, max_relays=0)
     built = plan_mod.build_plan(group, facts)
     assert plan_mod.isolation_problems([built]) == []

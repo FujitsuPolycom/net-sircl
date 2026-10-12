@@ -15,27 +15,33 @@ ROOT = Path(__file__).resolve().parents[1]
 class ReleaseTests(unittest.TestCase):
     def test_measured_transport_source_bytes_are_retained(self):
         manifest = json.loads((ROOT / "SOURCE.json").read_text())
-        for name, expected in manifest["unchanged_source_sha256"].items():
+        for name, expected in manifest["measured_source_sha256"].items():
             with self.subTest(path=name):
                 self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), expected)
 
+    @unittest.skipUnless((ROOT / ".git").exists(), "source archive has no Git index; packaging requires a checkout")
     def test_archive_reproducible_and_complete(self):
         with tempfile.TemporaryDirectory() as tmp:
             archives = [Path(tmp) / name for name in ("first.tar.gz", "second.tar.gz")]
-            for path in archives:
-                subprocess.run([sys.executable, str(ROOT / "transport-core/tools/package.py"),
-                                "--output", str(path)], check=True)
+            # An untracked file inside a shipped directory must never enter the archive.
+            with tempfile.NamedTemporaryFile(dir=ROOT / "docs", suffix=".md"):
+                for path in archives:
+                    subprocess.run([sys.executable, str(ROOT / "transport-core/tools/package.py"),
+                                    "--output", str(path)], check=True)
             self.assertEqual(archives[0].read_bytes(), archives[1].read_bytes())
             with tarfile.open(archives[0]) as archive:
                 members = archive.getmembers()
                 names = {m.name for m in members}
+                tracked = set(filter(None, subprocess.check_output(
+                    ["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")))
+                self.assertEqual(names, tracked)
                 self.assertEqual(len(names), len(members))
                 for required in ("README.md", "LICENSE", "NOTICE", "Makefile", "SOURCE.json",
                                  "examples/pair.topology", ".github/workflows/ci.yml",
-                                 "net-sircl/nccl/LICENSE.txt", "transport-core/PROVENANCE.json",
+                                 "net-sircl/nccl/LICENSE.txt", "docs/transport-core.md",
                                  "fabric-tool/LICENSE", "fabric-tool/NOTICE", "fabric-tool/VERSION",
                                  "fabric-tool/mesh_marker.c", "fabric-tool/fabric_tool/cli.py",
-                                 "fabric-tool/fabric-tool", "fabric-tool/tests/test_equivalence.py"):
+                                 "fabric-tool/fabric-tool", "fabric-tool/tests/test_plan.py"):
                     self.assertIn(required, names)
                 for member in members:
                     self.assertTrue(member.isfile())

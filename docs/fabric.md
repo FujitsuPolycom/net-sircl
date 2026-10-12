@@ -1,85 +1,137 @@
-# Install and maintain the relay table
+# Configure relays between Sparks
 
-Follow the [rings and paths quickstart](../README.md#rings-and-paths) to run
-the bundled tool. Use the same topology file for the plugin and tool. A pair
-needs no relay table. A full ring needs one whenever communicating peers are
-not direct neighbours; a path needs one for its closing connection.
+Use the same topology file for the plugin and fabric-tool. A pair needs no
+relays. A ring needs them when communicating peers are not direct neighbours.
+A path needs them because NCCL's ring algorithm connects the two end hosts,
+which share no cable. A *layout* is the cabling and ordered hosts; a *group*
+in the tool's output is the set of hosts described by one topology file.
 
-The tool configures forwarding, endpoint routes, permanent neighbours and
-RDMA transmit markers. It does not assign interface addresses or bring links
-up. Each of the four RDMA functions needs an IPv4 address, and each cable's
-ends must share a subnet per function class. All hosts must use the same
-function-to-network-device mapping. The default lane relay limit is three.
+## How relays work
+
+The sender installs an IP route for a far host through its first adjacent
+Spark, plus a permanent neighbour entry mapping the next hop to its MAC
+address. A marker process on the sender's NIC changes each outgoing RDMA
+packet's EtherType to `0x88b4 + k`, where k is the number of relays left.
+Each intermediate NIC forwards the packet from ingress to egress (hardware
+hairpin forwarding), changes the next-hop MAC and decrements the tag. The last
+relay restores IPv4's EtherType, `0x0800`.
+
+Queue pairs use flow label 0. The marker selects packets by destination address,
+not UDP port. EtherType lies outside RDMA's invariant CRC (ICRC), so relays
+can change it without invalidating the packet. Rewriting UDP fields would
+affect that checksum. Egress can use the same function class as ingress, or
+the sibling function on the other port; the default is same-class for a full ring and sibling for a path.
+
+Each forwarding queue holds 512 KiB and cannot pause senders. The plugin's
+relay window limits bytes in flight, but does not enforce an aggregate limit
+across several senders. The plan reports lanes sharing each queue and a budget
+based on 75% of its capacity divided by the reported load factor.
+
+The tool does not assign addresses or bring links up. Each of the four RDMA
+functions needs IPv4. Each cable's ends must share a subnet on the primary
+functions (`rocep1...`) and another on the secondary functions (`roceP2...`).
+All hosts must use the same function-to-network-interface mapping. By default
+a lane may cross three relays (`--max-relays`); the plugin hardware measurements
+cover at most two. Three relays have not been measured for this release.
 
 ## Plan, apply and verify
 
-`plan` is the default and performs no host reads. Without facts it uses
-placeholders. For exact install scripts, collect facts from all hosts and run:
+Run from `fabric-tool/` on a Linux workstation with SSH access to every host.
+Replace the topology path, names and SSH targets below. Names must match each
+host's `hostname`; the SSH account needs noninteractive sudo. Marker compilation
+needs the build dependencies from the README on every host.
 
 ```sh
-python3 -m fabric_tool plan --topology "$topology" --facts facts.json --commands
+topology=/absolute/path/to/path4.topology
+python3 -m fabric_tool --topology "$topology"  # offline plan; no host reads
+fabric() {
+  python3 -m fabric_tool "$@" --topology "$topology" \
+    --ssh node-0=USER@HOST_0 --ssh node-1=USER@HOST_1 \
+    --ssh node-2=USER@HOST_2 --ssh node-3=USER@HOST_3
+}
+# Read every host's function interfaces, MAC and IPv4 addresses.
+fabric facts --output facts.json
+# Preview, then compile the RDMA packet marker on every host.
+fabric install-marker --scripts
+fabric install-marker --execute
+# Preview, then install routes, neighbour entries, forwarding rules and markers.
+fabric apply --facts facts.json
+fabric apply --facts facts.json --execute
+# Check installed objects and every lane's IP route; require exit zero.
+fabric verify --facts facts.json
 ```
 
-Run from `fabric-tool/`, or use the installed `fabric-tool` entry point.
-The README's `fabric` shell function supplies a topology and an SSH target for
-every host. Its `facts` command creates a complete document in one read. Local
-per-host `facts` outputs can instead be merged by passing repeated `--facts`
-arguments to `plan`, `apply`, `verify` or `install-boot`.
+Host-changing commands only execute with `--execute`. For complete scripts
+without host access, run `python3 -m fabric_tool plan --topology FILE
+--facts facts.json --commands`. Repeated `--facts` files merge, rejecting
+contradictory entries. Facts must cover every topology host, even for local apply.
+For other layouts, repeat `--ssh NAME=USER@HOST` once per topology host.
 
-`apply` reads hosts and previews reconciliation; only `--execute` changes
-them. An executing apply rereads and verifies changed hosts. Always run
-`verify` afterward, including when apply reports nothing to change. Verify
-checks forwarding objects and that each installed lane destination resolves
-over its expected device. Host identity, contradictory facts, cabling mismatch
-and foreign ownership can block changes. A failure after execution starts can
-leave partial state: inspect `status`, resolve the cause and reconcile again.
+An executing apply rereads and verifies changed hosts. Always run `verify`
+afterward, even if apply reports nothing to change. Identity mismatches,
+contradictory facts, cabling mismatches and foreign ownership block changes.
+A failure during execution can leave partial state: inspect `status` and
+resolve the cause before using the relays.
 
-## Ownership and removal
-
-Do not run two fabric installers on the same hosts. The tool refuses a
-SparkRing ownership record. If SparkRing manages the table, follow its own
-maintenance/removal procedure and disable its automatic restore before using
-this tool. Keep the prior inputs so its table can be restored later.
-
-For a table installed by this tool, using the README's shell function:
+For a manual route check on a sending host, substitute a far function's IPv4
+address and the local sending function's address:
 
 ```sh
-fabric status
-fabric remove                         # preview
-fabric remove --execute
+ip route get FAR_ADDRESS from LOCAL_ADDRESS
+ethtool -S NETDEV | grep -Ei 'discard|drop|out_of_buffer'
+cat /sys/class/infiniband/FUNCTION/hw_counters/out_of_sequence
+cat /sys/class/infiniband/FUNCTION/hw_counters/packet_seq_err
 ```
 
-Removal targets protocol-82 routes/neighbours, reserved-preference filters,
-owned qdiscs, markers and the tool's record. Inspect ownership before using
-the optional `--adopt` flag. Routes outside the relay plan are not adopted.
+Check the selected interface and compare counters before and after traffic.
+See the [hardware procedure](../fabric-tool/HARDWARE-TEST-PLAN.md) for all counters.
 
-## Boot unit
+## Ownership
 
-`install-boot` runs locally on each Spark with root privileges; it refuses
-`--ssh`. It writes `fabric-table.service`, topology and complete facts under
-`/etc/fabric-table/`, a tool copy under `/usr/local/lib/fabric-tool`, and
-`/usr/local/bin/fabric-tool`. The unit runs `apply --boot`: restore missing
-objects and markers, remove nothing. It is a oneshot unit, not continuous
-marker supervision. Network addresses must be ready at `network-online.target`.
+fabric-tool marks installed IP routes and neighbour entries with protocol 82,
+and forwarding filters with `tc` ingress preferences 11Ã¢â‚¬â€œ17. Its ownership
+record is `/run/fabric-table/relay-state.json`. `remove` targets marked objects,
+owned ingress qdiscs, marker processes and that record.
 
-After reboot, run `fabric verify` from the controlling workstation and inspect
+It refuses hosts with `/run/sparkring-fabric/relay-state.json`, written by the
+SparkRing project's relay installer. Remove those relays with that installer's
+tooling and disable its restore service first. Keep its inputs for restoration.
+
+Using the shell function above, run `fabric status`, then `fabric remove` to
+preview and `fabric remove --execute` to remove. Inspect ownership before
+using `--adopt`; routes outside the relay plan are not adopted.
+
+## Boot restoration
+
+Install the repository on every Spark. Copy the same topology and a `facts.json`
+covering every host to each Spark. Run locally on **each Spark**:
+
+```sh
+sudo /opt/net-sircl/bin/fabric-tool install-boot \
+  --topology /etc/net-sircl.topology --facts /absolute/path/to/facts.json
+sudo /opt/net-sircl/bin/fabric-tool install-boot \
+  --topology /etc/net-sircl.topology --facts /absolute/path/to/facts.json --execute
+```
+
+This writes topology and facts under `/etc/fabric-table/`, copies the tool to
+`/usr/local/lib/fabric-tool` and `/usr/local/bin/fabric-tool` (separate from the
+`/opt/net-sircl` install), enables `fabric-table.service` and applies the relays.
+At boot the oneshot unit runs `apply --boot`, restoring missing objects and
+markers without removing anything. It does not continuously supervise markers.
+Addresses must be ready at `network-online.target`.
+
+After reboot run `fabric verify --facts facts.json` from the workstation and
 `systemctl status fabric-table.service` on the restarted host. To disable
-restoration, run locally on every Spark:
-
-```sh
-sudo /usr/local/bin/fabric-tool remove-boot
-sudo /usr/local/bin/fabric-tool remove-boot --execute
-```
-
-This removes the unit and saved inputs. It leaves the installed tool copy and
-live table; use `remove` to remove the table itself.
+restoration run `sudo /usr/local/bin/fabric-tool remove-boot` locally, then
+repeat with `--execute`. This removes the unit and inputs but leaves live
+relays and the tool copy; use `remove` for live relays.
 
 ## Validation boundary
 
-The tool is equivalence-tested against SparkRing's planner on CPU, including
-exact command strings. Its simulated-host tests cover apply, verify, remove
-and boot restore. **Hardware validation is pending.** Neither CPU tests nor
-earlier plugin measurements establish this installer's real forwarding,
-systemd reboot behavior or performance. See [design](../fabric-tool/DESIGN.md),
-[hardware test plan](../fabric-tool/HARDWARE-TEST-PLAN.md) and
-[testing](testing.md) for scope and reproducible CPU commands.
+Status: implemented, CPU-tested, research-only; not run on hardware. Standalone
+tests cover planning, facts, command forms, boot previews and mocked boot
+operations. They do not simulate an entire network or prove forwarding and
+reboot restoration. See [testing and CI](testing.md) for the exact scope.
+Plugin hardware measurements used a different installer and do not qualify this
+one. See [design](../fabric-tool/DESIGN.md) and the
+[hardware procedure](../fabric-tool/HARDWARE-TEST-PLAN.md).

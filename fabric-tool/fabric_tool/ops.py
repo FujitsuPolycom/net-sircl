@@ -1,9 +1,8 @@
 """Operations on the hosts: read, plan, compare, apply and verify.
 
-Absorbed from ``sparkring_sircl.fabric.ops`` (SparkRing
-``spark_transport/sircl/sparkring_sircl/fabric/ops.py``); see NOTICE. Every
+Derived from the SparkRing relay installer; see NOTICE. Every
 host is reached through an *executor*: a function that runs one ``bash -s``
-script and returns its exit code and output — over SSH
+script and returns its exit code and output â€” over SSH
 (:func:`ssh_executor`, batch mode) or on this machine (:func:`local_executor`,
 the per-host run). The hosts of an operation are contacted in parallel.
 
@@ -230,7 +229,7 @@ def evaluate(topology: Topology, states: dict[int, HostState], file_facts: Facts
 def lane_route_checks(outcome: Outcome, *, installed_only: bool) -> dict[int, dict[str, str]]:
     """Destinations to resolve with ``ip route get`` per host, and the network device each must use.
 
-    Every SIRCL lane originating at a compared host (direct lanes use the connected
+    Every lane originating at a compared host (direct lanes use the connected
     route of their cable) and every other carried path. With
     ``installed_only``, relayed destinations whose origin route the
     comparison still has to add or replace are left out.

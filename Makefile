@@ -40,3 +40,15 @@ clean:
 	$(MAKE) -C net-sircl clean
 	$(MAKE) -C transport-core clean
 	$(MAKE) -C fabric-tool clean
+
+.PHONY: help
+help:
+	@echo "all                    Build transport core, plugin and relay marker"
+	@echo "emu                    Build the shared-memory test plugin"
+	@echo "check                  Run CPU and release tests"
+	@echo "check-e2e              Run single-GPU NCCL tests (prerequisites required)"
+	@echo "check-e2e-if-available  Run NCCL tests or explicitly skip missing prerequisites"
+	@echo "install                Install plugin, fabric-tool, examples and docs"
+	@echo "package                Archive git ls-files into dist/ (Git checkout required)"
+	@echo "check-release          Scan tracked source text for private data"
+	@echo "clean                  Remove generated component builds"

@@ -1,4 +1,4 @@
-"""Scan tracked text, withholding matched content; optionally match local site values."""
+"""Scan tracked text for host names, private IPv4 addresses, home paths and credentials without printing matches."""
 import argparse
 import ipaddress
 import json
@@ -37,7 +37,7 @@ def findings(text, site=()):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    parser.add_argument("--site-values", type=Path)
+    parser.add_argument("--site-values", type=Path, help="add one literal host name or address per line from FILE")
     args = parser.parse_args()
     site = []
     if args.site_values:

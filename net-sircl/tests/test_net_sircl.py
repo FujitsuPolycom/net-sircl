@@ -5,17 +5,13 @@
   (tests/standin/), its entry points driven between two processes of one host: transfers, the shared
   relay window, lanes, routeless connections, teardown with requests outstanding, peer loss and the
   connect deadline.
-- Topology files: the routes, relays and windows the plugin derives, against fixed expectations and,
-  when SparkRing's SIRCL package is beside this directory, against SIRCL's own route planner.
+- Topology files: the routes, relays and windows the plugin derives, against fixed expectations.
 - The plugin library builds against libibverbs and exports ncclNetPlugin_v12.
-- The vendored stand-in matches libsircl's copy when both are present.
 """
 import ctypes
-import filecmp
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,8 +20,6 @@ HERE = Path(__file__).resolve().parents[1]
 STANDIN = HERE / "tests" / "standin"
 CORE = next(p for p in (HERE.parents[1] / "transport-core", HERE.parent / "transport-core") if (p / "VERSION").is_file())
 CORE_SOURCES = [str(CORE / "src" / f) for f in ("core.c", "topology.c", "sysfs.c")]
-LIBSIRCL_TRANSPORT = HERE.parents[1] / "libsircl" / "src" / "transport"
-SIRCL_PACKAGE = HERE.parents[1] / "sircl"
 FLAGS = ["-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread"]
 STANDIN_FLAGS = ["-I", str(CORE / "include"), "-DNET_SIRCL_STANDIN", "-I", str(HERE), "-I", str(STANDIN / "fake_verbs"), "-I", str(STANDIN)]
 
@@ -138,24 +132,6 @@ class NetSirclTests(unittest.TestCase):
         self.assertIn("a cable is", self.routes("hosts a b\ncabling explicit\ncable 0.port2 1.port0\n", 0))
         self.assertIn("fewer than two hosts", self.routes("hosts a\n", 0))
 
-    @unittest.skipUnless((SIRCL_PACKAGE / "sparkring_sircl" / "routes.py").exists(), "SIRCL is not beside this checkout")
-    def test_topology_matches_sircls_planner(self):
-        sys.path.insert(0, str(SIRCL_PACKAGE))
-        try:
-            from sparkring_sircl import routes as planner
-        finally:
-            sys.path.pop(0)
-        for layout, cabling, n in (("ring:4", "ring", 4), ("path:0-3", "path", 4), ("ring:8", "ring", 8)):
-            parsed = planner.Layout.parse(layout)
-            derived = planner.derive_routes(parsed, 2)
-            topo = f"hosts {' '.join(f'h{i}' for i in range(n))}\ncabling {cabling}\n"
-            for rank in range(parsed.world):
-                ours = self.routes(topo, rank)
-                theirs = derived.route_map(rank)
-                for peer, lanes in theirs.items():
-                    with self.subTest(layout=layout, rank=rank, peer=peer):
-                        self.assertEqual(ours[str(peer)].split(":")[0], "/".join(lanes))
-
     # -- packaging --
     @unittest.skipUnless(Path("/usr/include/infiniband/verbs.h").exists(), "libibverbs headers not installed")
     def test_plugin_library_exports_the_v12_symbol(self):
@@ -170,11 +146,6 @@ class NetSirclTests(unittest.TestCase):
                                  check=True).stdout
         self.assertIn("ncclNetPlugin_v12", symbols)
 
-    @unittest.skipUnless(LIBSIRCL_TRANSPORT.exists(), "libsircl is not beside this checkout")
-    def test_vendored_standin_matches_libsircl(self):
-        for name in ("shm_verbs.c", "shm_verbs.h", "proxy_names.h", "fake_verbs/infiniband/verbs.h"):
-            with self.subTest(file=name):
-                self.assertTrue(filecmp.cmp(STANDIN / name, LIBSIRCL_TRANSPORT / name, shallow=False), name)
 
 
 if __name__ == "__main__":

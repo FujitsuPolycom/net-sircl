@@ -1,7 +1,7 @@
 """The topology file of ``net-sircl``, parsed into the tool's one layout.
 
 The file is the plugin's only route input
-(``spark_transport/transport-core/src/topology.c`` 11-98); this parser
+(``transport-core/src/topology.c``); this parser
 accepts the same keys and defaults:
 
 - ``hosts <name> ...``: host names in position order;
@@ -21,7 +21,7 @@ accepts the same keys and defaults:
 (:func:`fabric_tool.model.set_roles`) and returns the :class:`Topology`. Its
 :attr:`Topology.group` is the one group the tool plans: the fabric of the
 topology's cables over positions 0..N-1, whole cycle or path, with the
-relay-egress default of SparkRing's layouts (``same`` for a whole cycle,
+relay-egress default (``same`` for a whole cycle,
 ``sibling`` otherwise).
 """
 
@@ -43,7 +43,7 @@ CABLING_KINDS = ("ring", "path", "explicit")
 class GroupSpec:
     """The one group a topology file describes.
 
-    ``ring_size`` follows SparkRing's convention for a group on a ring: the
+    ``ring_size`` bounds the forwarding trace: the
     whole cycle is a ring of its own size, a path sits on a ring one Spark
     longer (the wrap position has no facts, so a frame that left the path's
     end could never be delivered). The attribute names match the plan
@@ -231,7 +231,7 @@ def _is_connected_path(fabric: Fabric) -> bool:
 
 
 def _group_of(topology: Topology) -> GroupSpec:
-    """The one group of a topology: whole cycle or path, with SparkRing's relay-egress default."""
+    """The one group of a topology: whole cycle or path, with the topology relay-egress default."""
     fabric = Fabric(topology.cables)
     layout = Layout(fabric, tuple(range(topology.size)))
     egress = "same" if fabric.kind == "cycle" else "sibling"

@@ -1,12 +1,6 @@
 """Cables, fabrics, layouts and lane routes of directly cabled DGX Sparks.
 
-Absorbed from SparkRing's ``sparkring_sircl.routes`` (SparkRing
-``spark_transport/sircl/sparkring_sircl/routes.py``); see NOTICE. The parts
-the relay table needs are kept: the four ConnectX-7 function roles, cables
-and fabrics with their shortest paths, session layouts, lane derivation, the
-relay queue load, and lane isolation. Validation of operator route maps, the
-ring harness's window planners and the ``SIRCL_FABRIC_DOCUMENT`` loader stay
-in SparkRing.
+Derived from the SparkRing relay installer; see NOTICE.
 
 Physical model. A DGX Spark has one ConnectX-7 with ports 0 and 1; each port
 appears as a primary and a secondary PCIe function, each with its own RDMA

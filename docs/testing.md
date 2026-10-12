@@ -1,92 +1,106 @@
-# Testing and CI
+# Build, tests and source archives
+
+## CPU checks
+
+On Linux with a C11 compiler, Make, Python 3.10+, pytest and rdma-core headers:
 
 ```sh
-make -j all emu
+make -j2 all emu
 make check
 make check-release
+```
+
+`make all` builds the core static library and dynamic-loader object, the
+real-NIC plugin and the packet marker. `make emu` builds the shared-memory
+test plugin. `make check` runs:
+
+- transport-core: two C test executables for concurrent window arithmetic, abort/progress
+  callbacks and emulated verbs, plus four Python discovery/topology tests.
+- net-sircl: 14 Python tests, including multiprocess transfer, window, lane,
+  teardown, peer-loss and deadline tests, fixed topology expectations and
+  the real-NIC library's v12 export check. That export check needs rdma-core
+  headers and `nm`; CI installs both.
+- fabric-tool: 26 standalone pytest cases for topology, plans, facts, exact
+  command forms, boot previews and mocked boot operations. No external
+  checkout or full-network simulator is used. These do not exercise real
+  apply/verify/remove across hosts or restoration after an actual reboot.
+- Release contracts: measured C/header hashes, example routes, embedded core
+  identity, and archive reproducibility/completeness. The archive test creates
+  an untracked file under docs and checks that the archive still contains
+  exactly `git ls-files`. This test skips in an extracted archive without Git
+  metadata; the other three release tests run there.
+
+External-project comparison, adapter and host-simulator tests are not shipped.
+CPU checks establish neither hardware qualification nor performance.
+
+## Single-GPU NCCL emulation
+
+`make check-e2e` requires CUDA-enabled PyTorch, a CUDA GPU and runtime NCCL
+2.32.3. Set `PYTHON` to the desired interpreter; if needed, set `LD_PRELOAD`
+to a compatible unpatched NCCL library. The test queries the loaded runtime.
+
+```sh
+make check-e2e PYTHON=python3
+make check-e2e-if-available PYTHON=python3
+```
+
+The first command fails if prerequisites are absent. The second prints `SKIP`
+and exits zero for absent prerequisites; once available, test failures fail
+the command. Two ranks share GPU 0 with P2P and NCCL shared-memory transport
+disabled, forcing NCCL traffic through the emulated network plugin. Plain
+and windowed/two-lane modes each verify all-reduce, all-gather and broadcast
+at six sizes from 8 KiB to 64 MiB, plus 20 CUDA-graph replays at 64 KiB.
+Graphs are released before process-group destruction. Each rank must select
+sircl, report seven exact-result lines and exit successfully.
+
+Logs and JSON summaries go under `test-results/`, which Git ignores and
+`make package` excludes. Logs contain this machine's host name; check them
+before sharing. The emulator moves bytes in shared memory and models no NIC,
+cable, physical relay queue or loss recovery.
+
+## CI
+
+The GitHub Actions job runs on `ubuntu-24.04` and `ubuntu-24.04-arm`:
+
+1. Install build-essential, Python 3, pytest and libibverbs-dev.
+2. Run `make -j2 all emu` and `make check check-release`.
+3. Run `make check-e2e-if-available`; public CPU runners normally report an
+   explicit prerequisite skip rather than running NCCL.
+4. Build the source archive, extract it, build all components and emulation,
+   and rerun `make check`. Only the Git-index archive test skips there.
+5. Stage `make install` and run the installed fabric-tool on the path-of-four
+   example as an offline JSON plan.
+
+CI does not access Sparks, run physical relay tests, install a boot unit on a
+host or establish performance. See the [hardware procedure](../fabric-tool/HARDWARE-TEST-PLAN.md).
+
+## Source archives and privacy
+
+```sh
 make package
+python3 scripts/check_release_safety.py .
 ```
 
-`make check` tests core planning, verbs ordering, topology parsing, plugin
-transfers from zero bytes to 4 MiB, pipelining, shared windows, lanes, peer loss,
-deadlines and teardown. It also validates examples, version stamping and
-archive contents. The fabric-tool suite tests planning, facts, command forms,
-boot previews and file operations. Install pytest (`python3-pytest` on Ubuntu)
-for these tests. No GPU, RoCE NIC, root access or remote host is needed.
+The archive is `dist/net-sircl-0.1.0.tar.gz`, built from `git ls-files` in
+this repository, using current tracked-file bytes and fixed timestamps,
+ownership and modes. Stage added or deleted files before packaging; a release
+should be built from a clean commit. Untracked files cannot ship. A tracked
+generated/private path, missing file or symlink makes packaging fail. Extraction
+needs no Git checkout to build or test; repackaging requires a checkout.
 
-Five inherited comparisons skip outside SparkRing: three proxy-adaptation
-tests require libsircl, and two plugin tests compare with the Python planner
-and libsircl stand-in. Fixed route expectations and actual transfer tests run
-in this repository. A missing libibverbs development package may cause the
-plugin symbol test to skip; CI installs it and builds the real library first.
+The scanner rejects default Spark host names (`spark-` plus four characters),
+IPv4 addresses outside documentation/loopback ranges, user-home paths and
+credential-like strings. It reports locations and rule names without matched
+values. `--site-values FILE` adds literal host names or addresses, one per line;
+keep the file untracked (`scripts/config/site-values.txt` is ignored and
+excluded). The scanner checks Git-tracked text; archive privacy is checked by
+scanning its extracted text with the same rules.
 
-Fabric-tool runs 26 standalone cases; 23 comparison/simulator cases skip when
-SparkRing's Python SIRCL package is absent. To reproduce those comparisons with
-a separate SparkRing checkout at `852407bd1f946840debce36a7299d303dfceb8cb`:
+## Source identity
 
-```sh
-PYTHONPATH=/path/to/SparkRing/spark_transport/sircl \
-  python3 -m pytest fabric-tool/tests -q -rs
-```
-
-All 49 cases passed during local integration, including 13 equivalence cases
-against SparkRing's planner and 10 simulated-host cases. The equivalence tests
-compare routes, filters, marker rules, exact command strings, digests and lane
-plans for rings of four/eight and paths of three/four. Boot CLI regression tests
-cover per-host apply, merged persisted facts and foreign-owner refusal. Facts
-round trips preserve subnet prefixes for cabling checks.
-The source checkout is only a test oracle; it is not shipped or needed at runtime.
-**Hardware validation of fabric-tool and its boot unit is pending.**
-
-## NCCL end to end on one GPU
-
-Use a CUDA-capable PyTorch environment with runtime NCCL 2.32.3. The workstation
-validation used PyTorch 2.10.0+cu128 and a prebuilt unpatched NCCL 2.32.3 library
-through `LD_PRELOAD`. If supplying a separate compatible NCCL library:
-
-```sh
-export LD_PRELOAD=/path/to/libnccl.so.2.32.3
-make check-e2e PYTHON=/path/to/cuda-python
-```
-
-Two ranks share GPU 0 using `NCCL_MULTI_RANK_GPU_ENABLE=1`. P2P and SHM transports
-are disabled so real NCCL uses the plugin, backed by shared-memory verbs.
-Both plain and 128 KiB windowed/two-lane cases run. Every element is checked
-for all-reduce, all-gather and broadcast from 8 KiB to 64 MiB; a 64 KiB graph
-replays 20 times, followed by graph release and process-group teardown.
-Logs and JSON summaries go under `test-results/` (untracked).
-
-`make check-e2e` fails if prerequisites are missing. CI uses
-`make check-e2e-if-available`: it reports an explicit skip when CUDA-enabled
-PyTorch, a CUDA GPU or NCCL 2.32.3 is absent. Once those prerequisites are found,
-test failures fail the job. NCCL GPU collectives cannot run on a CPU-only host;
-the CPU layer tests exercise the network API there without calling NCCL.
-
-## CI boundary
-
-The workflow builds and tests natively on `ubuntu-24.04` (x86_64) and
-`ubuntu-24.04-arm` (aarch64), labels listed in
-[GitHub's runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Both jobs build production and emulated libraries and the C relay marker, run CPU and release checks,
-make and inspect the source archive, and check full NCCL-test availability.
-Both also check the installed fabric-tool entry point. Standard hosted runners
-lack a CUDA GPU/PyTorch test environment, so the full
-NCCL case is expected to skip there. No private/self-hosted runner is selected.
-
-CI does not measure bandwidth/latency, ConnectX-7 hairpin forwarding, relay
-counters, DGX OS GID discovery, real IP routes, relaxed ordering, or physical
-queue-pair failure behavior. Passing CI is not hardware release qualification.
-
-## Source packaging
-
-`transport-core/tools/package.py` is the archive builder. In a standalone tree,
-the archive includes the root release files, docs, examples, scripts, tests,
-workflow, and sibling `net-sircl`, `transport-core` and `fabric-tool` trees.
-In SparkRing's layout it extracts those three components and supports optional
-libsircl with `--include-libsircl`. All three components are required by default.
-Build outputs, Git metadata and local test results are excluded. Archive member
-ordering, ownership, timestamps and gzip metadata are normalized.
-
-The release-safety checker scans tracked text without printing matched content.
-It rejects site-host patterns, non-documentation IPv4 addresses, user-home paths
-and credential shapes; optional private site values stay outside the archive.
+The startup line `net-sircl transport-core 0.1.0 ABI 1 source <sha256>` contains
+a digest of transport-core's C sources, headers, Python tools and VERSION.
+It is not a compiled-library checksum. Removing Python adaptation tools and
+changing packaging changes this digest while preserving every C/header byte.
+[SOURCE.json](../SOURCE.json) records the measured source hashes separately.
+See [retained compatibility code](transport-core.md#retained-compatibility-code).
