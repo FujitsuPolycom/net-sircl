@@ -4,7 +4,7 @@
 #include <assert.h>
 
 static struct ibv_qp_attr observed;
-static int rts_calls, injected_status, advisories;
+static int rts_calls, injected_status;
 static char last_log[1024];
 
 int __real_sccl_emu_ibv_modify_qp(struct ibv_qp *, struct ibv_qp_attr *, int);
@@ -35,7 +35,6 @@ static void capture(ncclDebugLogLevel level, unsigned long flags, const char *fi
   va_list ap;
   va_start(ap, fmt);
   vsnprintf(last_log, sizeof last_log, fmt, ap);
-  if (strstr(last_log, "recommended job default NCCL_MAX_NCHANNELS=8")) ++advisories;
   va_end(ap);
 }
 
@@ -91,35 +90,56 @@ static void valid(const char *timeout, const char *retry, int want_timeout, int 
   assert(!g.refs && !g.ndevs);
 }
 
-static void check_channel_advisory(void) {
-  const char *caps[] = {"NCCL_MAX_NCHANNELS", "NCCL_MAX_NRINGS", "NCCL_MAX_CTAS"};
-  for (unsigned i = 0; i < 3; ++i) setting(caps[i], NULL);
-  void *ctx = NULL, *other = NULL;
+static void check_channel_tuner(void) {
+  const char *caps[] = {"NCCL_MAX_NCHANNELS", "NCCL_MIN_NCHANNELS", "NCCL_MAX_NRINGS",
+                        "NCCL_MIN_NRINGS", "NCCL_MAX_CTAS", "NCCL_MIN_CTAS"};
+  for (unsigned i = 0; i < 6; ++i) setting(caps[i], NULL);
+  setting("NET_SIRCL_CHANNELS", NULL);
+  void *ctx = NULL, *t = NULL;
   assert(sircl_init(&ctx, 0, NULL, capture, NULL) == ncclSuccess);
-  assert(advisories == 1);
-  assert(sircl_init(&other, 0, NULL, capture, NULL) == ncclSuccess);
-  assert(advisories == 1); /* Shared initialization emits only one advisory. */
-  assert(!getenv("NCCL_MAX_NCHANNELS")); /* Never mutate NCCL's configuration. */
-  for (unsigned i = 0; i < 3; ++i) {
-    setting(caps[i], "24");
-    advise_relay_channels();
-    assert(advisories == 1);
+  int hosts = g.nhosts;
+  for (int n = 2; n <= 8; ++n) {
+    g.nhosts = n;
+    assert(ncclTunerPlugin_v4.init(n, n, capture, &t) == ncclSuccess);
+    float costs[7][3], original[7][3];
+    for (int i = 0; i < 7; ++i) for (int j = 0; j < 3; ++j) costs[i][j] = i + j - 1.0f;
+    memcpy(original, costs, sizeof costs);
+    int channels = 0;
+    assert(ncclTunerPlugin_v4.getCollInfo(t, ncclFuncAllReduce, 1<<26, 1,
+                                        (float **)costs, 7, 3, 0, &channels) == ncclSuccess);
+    assert(channels == (n == 2 ? 0 : 8));
+    assert(!memcmp(costs, original, sizeof costs));
+    assert(ncclTunerPlugin_v4.destroy(t) == ncclSuccess);
+  }
+  for (unsigned i = 0; i < 6; ++i) {
+    setting(caps[i], i % 2 ? "" : "16");
+    assert(tuner_init(4, 4, capture, &t) == ncclSuccess);
+    assert(((struct sircl_tuning *)t)->channels == 0);
+    tuner_destroy(t);
     setting(caps[i], NULL);
   }
-  /* A topology containing only direct peers has no recommendation. */
-  struct route saved[MAX_POSITIONS];
-  memcpy(saved, g.routes, sizeof saved);
-  for (int peer = 0; peer < g.nhosts; ++peer) g.routes[peer].relays = 0;
-  advise_relay_channels();
-  assert(advisories == 1);
-  memcpy(g.routes, saved, sizeof saved);
-  assert(sircl_finalize(other) == ncclSuccess);
+  assert(tuner_init(4, 1, capture, &t) == ncclSuccess);
+  assert(((struct sircl_tuning *)t)->channels == 0);
+  tuner_destroy(t);
+  setting("NET_SIRCL_CHANNELS", "16");
+  assert(tuner_init(4, 4, capture, &t) == ncclSuccess);
+  assert(((struct sircl_tuning *)t)->channels == 16);
+  tuner_destroy(t);
+  setting("NET_SIRCL_CHANNELS", "0");
+  assert(tuner_init(4, 4, capture, &t) == ncclSuccess);
+  assert(((struct sircl_tuning *)t)->channels == 0);
+  tuner_destroy(t);
+  setting("NET_SIRCL_CHANNELS", "65");
+  assert(tuner_init(4, 4, capture, &t) == ncclInvalidArgument && !t);
+  setting("NET_SIRCL_CHANNELS", NULL);
+  assert(!getenv("NCCL_MAX_NCHANNELS"));
+  g.nhosts = hosts;
   assert(sircl_finalize(ctx) == ncclSuccess);
 }
 
 int main(void) {
   setting("NET_SIRCL_OOB_ADDR", "127.0.0.1");
-  check_channel_advisory();
+  check_channel_tuner();
   setting("NCCL_IB_TIMEOUT", "13");
   setting("NCCL_IB_RETRY_CNT", "2");
   valid(NULL, NULL, 20, 7); /* NCCL's environment does not override plugin settings. */

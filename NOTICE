@@ -78,3 +78,11 @@ Relay planning, host-state parsing, command generation and reporting derive
 from the SparkRing project's relay installer, revision
 47de221a3cb94a99a2a1356fb61fa123d5047ac7. mesh_marker.c retains that source's
 bytes. SOURCE.json at the repository root records source provenance.
+
+The 0.1.2 tuner vendors NVIDIA NCCL v2.32.3-1's
+src/include/plugin/tuner/tuner_v4.h unchanged, and its ncclFunc_t enum in
+nccl/tuner.h. Copyright NVIDIA CORPORATION & AFFILIATES and Meta Platforms,
+Inc. and affiliates; Apache-2.0 and BSD-3, as retained in nccl/LICENSE.txt.
+The tuner loader, tuning, enqueue, graph/topology and communicator destruction
+sources at v2.32.3-1 were read for API use and lifecycle diagnosis; see
+docs/channels.md and docs/configuration.md for attributed source locations.

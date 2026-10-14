@@ -608,16 +608,6 @@ static ncclResult_t open_devices(void) {
 
 /* NCCL owns communicator geometry. Its net ABI cannot set a collective channel cap;
  * changing process environment here would also affect unrelated communicators. */
-static void advise_relay_channels(void) {
-  if (getenv("NCCL_MAX_NCHANNELS") || getenv("NCCL_MAX_NRINGS") || getenv("NCCL_MAX_CTAS")) return;
-  for (int peer = 0; peer < g.nhosts; ++peer) {
-    if (g.routes[peer].relays > 0) {
-      WARN("net-sircl: relayed peer configured; recommended job default NCCL_MAX_NCHANNELS=8 on all ranks (leave channel minima unset); cap not applied by plugin");
-      return;
-    }
-  }
-}
-
 static ncclResult_t sircl_init(void **ctx, uint64_t commId, ncclNetCommConfig_v12_t *config,
                                ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   (void)commId; (void)config; (void)profFunction;
@@ -667,7 +657,6 @@ static ncclResult_t sircl_init(void **ctx, uint64_t commId, ncclNetCommConfig_v1
       if (r == ncclSuccess && claim_host()) r = ncclSystemError;
     }
     if (r == ncclSuccess) {
-      advise_relay_channels();
       INFO("net-sircl: directional relay budget %d, hosts %d, model %s", g.relay_budget,
            g.nhosts, g.route_derived ? "routes" : "aggregate");
       for (int d = 0; d < g.ndevs; ++d)
@@ -723,6 +712,8 @@ static ncclResult_t sircl_devices(int *ndev) {
   *ndev = g.ndevs;
   return ncclSuccess;
 }
+
+#include "net_sircl_tuner.h"
 
 static ncclResult_t sircl_get_properties(int d, ncclNetProperties_v12_t *p) {
   if (d < 0 || d >= g.ndevs) return ncclInvalidArgument;

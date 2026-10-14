@@ -54,6 +54,6 @@ clean:
 # The source digest covers transport-core sources, headers and tools, not the compiled library.
 .core-build/core_identity.h: $(wildcard $(CORE)/src/*.c) $(wildcard $(CORE)/include/*.h) $(wildcard $(CORE)/include/sircl_core/*) $(wildcard $(CORE)/tools/*.py) $(CORE)/VERSION
 	$(PYTHON) $(CORE)/tools/identity.py --output $@
-libnccl-net-sircl.so libnccl-net-sircl-emu.so: .core-build/core_identity.h net_sircl_compat.h net_sircl_routes.h
+libnccl-net-sircl.so libnccl-net-sircl-emu.so: .core-build/core_identity.h net_sircl_compat.h net_sircl_routes.h net_sircl_tuner.h
 
 CPPFLAGS += -DSIRCL_CORE_STATIC

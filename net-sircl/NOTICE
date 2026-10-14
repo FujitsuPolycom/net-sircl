@@ -47,3 +47,9 @@ The plugin's transport design and C route derivation follow the originating
 project's collective library. No RoCEnante source file is copied into
 net-sircl/net_sircl.c. net-sircl/tests/standin/ includes transport-core's
 shared-memory RDMA emulator, used by tests rather than the real-NIC plugin.
+
+nccl/tuner_v4.h is unchanged from NVIDIA NCCL v2.32.3-1
+src/include/plugin/tuner/tuner_v4.h; nccl/tuner.h retains that release's
+ncclFunc_t enum. NVIDIA and Meta copyright and Apache-2.0/BSD-3 notices are
+retained in the headers and nccl/LICENSE.txt. The original tuner policy is
+in net_sircl_tuner.h; upstream call sites are attributed in docs/channels.md.
