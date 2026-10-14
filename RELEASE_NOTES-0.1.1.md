@@ -138,16 +138,44 @@ in the retained `ring8-hw-20261013` research record, with each round's
 records are not distributed. The candidate exported here is 37daef99,
 whose advisory recommends eight channels; rounds 9–10 measure ee91dcc6.
 
-## Final hardware pass — PLACEHOLDER FOR MAINTAINER
+## Final hardware pass
 
-**Pending: fill from `net-sircl-0.1.1-final/RESULTS.md`.**
+**Conditions.** Eight DGX Sparks (GB10, ConnectX-7 RoCE, 200 Gb/s) cabled as a
+cycle of eight, 2026-10-14 10:54-11:31 UTC; NVIDIA NCCL 2.32.3 and nccl-tests
+2.21.1; net-sircl source 37daef99 (wire version 6) built on the hosts;
+`NCCL_MAX_NCHANNELS=8` in the job environment unless stated. Layouts: a path of
+four (positions 0-3, rank 3 reaching rank 0 through two relays), the whole
+cycle of eight, and a direct pair (positions 0-1). The stock NCCL controls use
+the settings of the 0.1.0 qualification (the cycle control runs 4 channels).
+A relay-drop watchdog and per-function drop and sequence counters on all eight
+hosts were checked for every job.
 
-- Conditions and exact source/binary identity: **TO FILL**.
-- Measurement procedure, settings, sample counts and counters: **TO FILL**.
-- Results, correctness, errors and performance: **TO FILL**.
-- Conclusion, limitations and qualification scope: **TO FILL**.
+**Results** (median bus bandwidth, all-reduce, out of place):
 
-This section contains no final-pass result or implied qualification.
+| Layout | 8 MiB | 16 MiB | 32 MiB | 64 MiB | 128 MiB | 256 MiB |
+|---|---|---|---|---|---|---|
+| Path of four, GB/s | 14.7-17.0 at 8-256 MiB; 1.07-1.15 of the 0.1.0-era baseline at 16-256 MiB | | | | | |
+| Cycle of eight, ratio to stock NCCL | 1.02 | 1.20 | 1.02 | 1.00 | 0.96 | 0.97 |
+| Direct pair, ratio to stock NCCL | 1.89 | 1.10 | 0.97 | 1.06 | 1.19 | 1.12 |
+
+- Path of four: all 13 nccl-tests lines passed, exact; the CUDA-graph
+  all-reduce line took 45.8 s; all-gather 14.5-14.7 GB/s and broadcast
+  24.3 GB/s at 256 MiB. Stock NCCL cannot run this path's relayed edge.
+- Cycle of eight: the CUDA-graph all-reduce line took 35.4 s. Without the
+  channel cap net-sircl reached 0.19-0.60 of stock at 8-32 MiB.
+- All 22 nccl-tests jobs were exact with every rank exiting 0, and no job on
+  any host recorded a relay drop, sequence error or retry.
+
+**PyTorch teardown.** On the path of four, PyTorch eager and CUDA-graph
+all-reduce results were exact on all ranks, but
+`torch.distributed.destroy_process_group()` did not return within 150 s.
+Framework teardown is not qualified; long-running servers that never destroy
+the process group are unaffected.
+
+**Conclusion.** With `NCCL_MAX_NCHANNELS=8`, net-sircl 0.1.1 is drop-free and
+exact on paths with relays, cycles and pairs in these runs, and reaches
+0.96-1.20 of stock NCCL where stock NCCL runs. Status remains research-only:
+one start per configuration, NCCL 2.32.3 only, and the teardown hang above.
 
 ## Other limits and provenance
 
