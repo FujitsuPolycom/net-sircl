@@ -125,7 +125,8 @@ def launch(args):
         env["NCCL_HOSTID"] = f"net-sircl-emulated-host-{rank}"
         env["NCCL_CUMEM_HOST_ENABLE"] = "0"
         log = open(os.path.join(args.out, f"rank{rank}.log"), "w")
-        command = ([args.native, str(rank), os.path.join(rendezvous.name, "id")] if args.native else
+        command = ([sys.executable, args.rank_script] if args.rank_script else
+                   [args.native, str(rank), os.path.join(rendezvous.name, "id")] if args.native else
                    [sys.executable, __file__, "--rank", "--teardown", args.teardown,
                     "--teardown-timeout", str(args.teardown_timeout)])
         procs.append((subprocess.Popen(command, env=env,
@@ -170,6 +171,7 @@ def main():
     parser.add_argument("--teardown-timeout", type=float, default=15)
     parser.add_argument("--plugin", default="")
     parser.add_argument("--native", default="", help="path to the nccl_compat_e2e executable")
+    parser.add_argument("--rank-script", default="", help="run a standalone Python rank check with the emulated environment")
     parser.add_argument("--timeout", type=float, default=240)
     parser.add_argument("--out", default="/tmp/nccl-e2e")
     args = parser.parse_args()
@@ -179,6 +181,8 @@ def main():
         parser.error("--windowed models two endpoints of a four-host path")
     if args.native and args.world_size != 2:
         parser.error("the native backend models two ranks")
+    if args.rank_script and (args.native or args.teardown != "release-graph"):
+        parser.error("--rank-script is a separate backend and owns graph lifetime")
     if args.native and args.teardown != "release-graph":
         parser.error("the native backend releases its graph before communicator teardown")
     if args.rank:
