@@ -21,9 +21,11 @@ def main():
     args = parser.parse_args()
     cases = [("path4", 4, "path", {}, 8), ("cycle8", 8, "ring", {}, 8),
              ("pair", 2, "path", {}, 0),
+             ("pair-stock-tuner", 2, "path", {"NCCL_TUNER_PLUGIN": "none"}, None),
              ("override4", 4, "path", {"NCCL_MAX_NCHANNELS": "4"}, 0),
              ("override16", 4, "path", {"NCCL_MAX_NCHANNELS": "16"}, 0),
              ("disabled", 4, "path", {"NCCL_TUNER_PLUGIN": "none"}, None)]
+    pair_counts = None
     for name, world, layout, overrides, policy in cases:
         env = {k: v for k, v in os.environ.items() if k not in OVERRIDES}
         env.update(NCCL_ALGO="Ring", **overrides)
@@ -52,10 +54,14 @@ def main():
             assert min(active) > 0
             limit = policy or int(overrides.get("NCCL_MAX_NCHANNELS", "64"))
             assert max(active) <= limit, (name, rank, active)
-            if name in ("pair", "override16", "disabled"):
+            if name in ("override16", "disabled"):
                 assert max(active) > 8, (name, rank, active)
             counts.append(max(active))
         summary["max_active_channels"] = counts
+        if name == "pair":
+            pair_counts = counts
+        if name == "pair-stock-tuner":
+            assert counts == pair_counts, (counts, pair_counts)
         summary["case"] = name
         (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         print(json.dumps(summary), flush=True)
