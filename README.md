@@ -17,7 +17,7 @@ must use a plugin with the same wire version.
   path of four. This release is research-only.
 - Linux with working NVIDIA drivers and RoCE v2 networking. No minimum DGX OS
   version is established by this repository's evidence.
-- NCCL **2.32.3**, the tested runtime, with the v12 network-plugin API. The library also exports APIs v7â€“v11;
+- NCCL **2.32.3**, the tested runtime, with the v12 network-plugin API. The library also exports APIs v7-v11;
   CPU ABI checks do not qualify every NCCL runtime on hardware.
 - A C11 compiler, Make, Python 3.10 or later, and rdma-core development headers.
   CPU tests also need pytest. CUDA-enabled PyTorch runs the example below.
