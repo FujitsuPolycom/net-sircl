@@ -23,8 +23,8 @@ def main():
              ("pair", 2, "path", {}, 0),
              ("pair-stock-tuner", 2, "path", {"NCCL_TUNER_PLUGIN": "none"}, None),
              ("override4", 4, "path", {"NCCL_MAX_NCHANNELS": "4"}, 0),
-             ("override16", 4, "path", {"NCCL_MAX_NCHANNELS": "16"}, 0),
-             ("disabled", 4, "path", {"NCCL_TUNER_PLUGIN": "none"}, None)]
+             ("override16", 4, "path", {"NCCL_MAX_NCHANNELS": "16", "NET_SIRCL_CHANNELS": "4"}, 0),
+             ("disabled", 4, "path", {"NCCL_TUNER_PLUGIN": "none", "NET_SIRCL_CHANNELS": "4"}, None)]
     pair_counts = None
     for name, world, layout, overrides, policy in cases:
         env = {k: v for k, v in os.environ.items() if k not in OVERRIDES}
@@ -55,7 +55,9 @@ def main():
             limit = policy or int(overrides.get("NCCL_MAX_NCHANNELS", "64"))
             assert max(active) <= limit, (name, rank, active)
             if name in ("override16", "disabled"):
-                assert max(active) > 8, (name, rank, active)
+                # NCCL may naturally choose fewer than 16; prove the explicit
+                # NCCL policy/disablement defeats the plugin's requested 4.
+                assert max(active) > 4, (name, rank, active)
             counts.append(max(active))
         summary["max_active_channels"] = counts
         if name == "pair":
