@@ -100,7 +100,8 @@ version may differ from a preloaded NCCL library.
 Delete **all captured graphs referencing the communicator** before teardown:
 
 ```python
-del graph  # also release any other references to captured graphs
+graph.reset()  # release the executable even if Python aliases remain
+del graph  # reset/release every other captured graph too
 torch.cuda.synchronize()
 torch.distributed.destroy_process_group()
 ```
@@ -108,3 +109,16 @@ torch.distributed.destroy_process_group()
 NCCL waits for graph references during communicator destruction. Keeping them
 alive can hang teardown with either this plugin or NCCL's socket transport.
 The [emulated test](../net-sircl/tests/emulation/nccl_e2e.py) demonstrates the order.
+`make check-teardown` tests four ranks on an emulated path with a 15-second
+teardown deadline. `python scripts/check_teardown.py --negative-controls` also
+checks that retained graphs reach that deadline with sircl and stock Socket.
+Use [the hardware check](../examples/torch_teardown.py) under an outer 150-second
+job timeout. It checks eight eager all-reduce sizes and 20 graph replays, releases
+the graph, then enforces a separate 15-second teardown bound.
+
+The 0.1.1 hardware T1 script retained its graph. The same ordering reproduces on
+the workstation with both transports; resetting the graph lets both exit. NCCL
+2.32.3's [commDestroySync](https://github.com/NVIDIA/nccl/blob/v2.32.3-1/src/init.cc#L3122)
+waits for graph references before stopping proxy threads and closing the network.
+This fixes the test/application lifetime; it does not establish that all hardware
+teardown failures have been resolved. The corrected T1 still needs the ring8c run.

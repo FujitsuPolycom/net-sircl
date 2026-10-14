@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 
 SIZES = [8 << 10, 64 << 10, 512 << 10, 4 << 20, 32 << 20, 64 << 20]
 
@@ -81,11 +82,19 @@ def rank_main(args):
     print(f"rank {rank}: graph 64 KiB x20 {'exact' if ok else 'WRONG'}", flush=True)
 
     if args.teardown == "release-graph":
+        graph.reset()
         del graph
         torch.cuda.synchronize()
+    def expired():
+        print(f"rank {rank}: FAIL teardown exceeded {args.teardown_timeout} s", flush=True)
+        os._exit(124)
+    deadline = threading.Timer(args.teardown_timeout, expired)
+    deadline.daemon = True
+    deadline.start()
     start = time.monotonic()
     print(f"rank {rank}: destroy_process_group ...", flush=True)
     dist.destroy_process_group()
+    deadline.cancel()
     print(f"rank {rank}: teardown {time.monotonic() - start:.2f} s", flush=True)
     print(f"rank {rank}: {'PASS' if ok else 'FAIL'}", flush=True)
     return 0 if ok else 1
@@ -93,10 +102,10 @@ def rank_main(args):
 
 def launch(args):
     os.makedirs(args.out, exist_ok=True)
-    base = dict(os.environ, WORLD_SIZE="2", MASTER_ADDR="127.0.0.1", MASTER_PORT=str(29500 + os.getpid() % 500),
+    base = dict(os.environ, WORLD_SIZE=str(args.world_size), MASTER_ADDR="127.0.0.1", MASTER_PORT=str(29500 + os.getpid() % 500),
                 NCCL_MULTI_RANK_GPU_ENABLE="1", NCCL_P2P_DISABLE="1", NCCL_SHM_DISABLE="1", NCCL_NVLS_ENABLE="0",
                 NCCL_DEBUG="INFO",
-                NCCL_DEBUG_SUBSYS="INIT,NET", NCCL_SOCKET_IFNAME="lo")
+                NCCL_DEBUG_SUBSYS="INIT,NET,TUNING", NCCL_SOCKET_IFNAME="lo")
     if args.net == "sircl":
         base.update(NCCL_NET="sircl", NCCL_NET_PLUGIN=args.plugin, NET_SIRCL_OOB_ADDR="127.0.0.1",
                     SIRCL_EMU_FABRIC=f"/sircl-emu-glm-e2e-{os.getpid()}", NET_SIRCL_STANDIN_DEVICES="4")
@@ -106,20 +115,19 @@ def launch(args):
     rendezvous = tempfile.TemporaryDirectory(prefix="net-sircl-nccl-")
     topology = os.path.join(rendezvous.name, "topology")
     with open(topology, "w") as f:
-        f.write(("hosts rank0 relay0 relay1 rank1\ncabling path\n" if args.windowed else
-                 "hosts rank0 rank1\ncabling path\n") + "port0 emu0 emu1\nport1 emu2 emu3\n")
-    for rank in range(2):
+        hosts = "rank0 relay0 relay1 rank1" if args.windowed else " ".join(f"rank{r}" for r in range(args.world_size))
+        f.write(f"hosts {hosts}\ncabling {args.layout}\nport0 emu0 emu1\nport1 emu2 emu3\n")
+    for rank in range(args.world_size):
         env = dict(base, RANK=str(rank), NET_SIRCL_TOPOLOGY=topology,
-                   NET_SIRCL_HCA="emu0,emu1" if rank == 0 else "emu2,emu3",
+                   NET_SIRCL_HCA="emu0,emu1,emu2,emu3",
                    NET_SIRCL_POSITION=str(rank * 3 if args.windowed else rank))
-        if args.net == "sircl":
-            # NCCL's host-hash override models separate hosts on one GPU, including releases before
-            # NCCL_MULTI_RANK_GPU_ENABLE. P2P and SHM remain disabled; every transfer uses ext-net.
-            env["NCCL_HOSTID"] = f"net-sircl-emulated-host-{rank}"
-            env["NCCL_CUMEM_HOST_ENABLE"] = "0"
+        # Model separate hosts for both sircl and the Socket control.
+        env["NCCL_HOSTID"] = f"net-sircl-emulated-host-{rank}"
+        env["NCCL_CUMEM_HOST_ENABLE"] = "0"
         log = open(os.path.join(args.out, f"rank{rank}.log"), "w")
         command = ([args.native, str(rank), os.path.join(rendezvous.name, "id")] if args.native else
-                   [sys.executable, __file__, "--rank", "--teardown", args.teardown])
+                   [sys.executable, __file__, "--rank", "--teardown", args.teardown,
+                    "--teardown-timeout", str(args.teardown_timeout)])
         procs.append((subprocess.Popen(command, env=env,
                                        stdout=log, stderr=subprocess.STDOUT), log))
     deadline = time.monotonic() + args.timeout
@@ -136,7 +144,8 @@ def launch(args):
         teardown = next((line.split("teardown ")[1] for line in text.splitlines() if ": teardown " in line), None)
         results.append({"rank": rank, "exit": code, "pass": f"rank {rank}: PASS" in text,
                         "exact_lines": text.count(" exact"), "teardown": teardown,
-                        "plugin": "via NET/sircl/" in text and "via P2P" not in text, "wrong": "WRONG" in text})
+                        "plugin": "Using network sircl" in text and "via NET/sircl/" in text and "via P2P" not in text,
+                        "wrong": "WRONG" in text})
     if args.net == "sircl":
         shm = "/dev/shm" + base["SIRCL_EMU_FABRIC"]
         if os.path.exists(shm):
@@ -156,11 +165,20 @@ def main():
     parser.add_argument("--teardown", choices=("release-graph", "keep-graph"), default="release-graph")
     parser.add_argument("--net", choices=("sircl", "socket"), default="sircl")
     parser.add_argument("--windowed", action="store_true")
+    parser.add_argument("--world-size", type=int, default=2)
+    parser.add_argument("--layout", choices=("path", "ring"), default="path")
+    parser.add_argument("--teardown-timeout", type=float, default=15)
     parser.add_argument("--plugin", default="")
     parser.add_argument("--native", default="", help="path to the nccl_compat_e2e executable")
     parser.add_argument("--timeout", type=float, default=240)
     parser.add_argument("--out", default="/tmp/nccl-e2e")
     args = parser.parse_args()
+    if args.world_size < 2 or args.world_size > 8 or args.teardown_timeout <= 0 or args.timeout <= 0:
+        parser.error("world-size must be 2..8 and timeouts must be positive")
+    if args.windowed and (args.world_size != 2 or args.layout != "path"):
+        parser.error("--windowed models two endpoints of a four-host path")
+    if args.native and args.world_size != 2:
+        parser.error("the native backend models two ranks")
     if args.native and args.teardown != "release-graph":
         parser.error("the native backend releases its graph before communicator teardown")
     if args.rank:

@@ -18,6 +18,8 @@ check-e2e: emu
 	$(PYTHON) scripts/check_e2e.py
 check-e2e-if-available: emu
 	$(PYTHON) scripts/check_e2e.py --if-available
+check-teardown: emu
+	$(PYTHON) scripts/check_teardown.py
 install:
 	$(MAKE) -C net-sircl install PREFIX=$(PREFIX) DESTDIR=$(DESTDIR)
 	$(MAKE) -C fabric-tool install PREFIX=$(PREFIX) DESTDIR=$(DESTDIR)
