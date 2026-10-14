@@ -232,7 +232,7 @@ def _command_verify(args: argparse.Namespace, topology: topology_mod.Topology,
                            adopt=False, check_hostname=not args.skip_hostname_check,
                            max_relays=args.max_relays, positions=sorted(hosts))
     _print_outcome(outcome, args, scripts=args.scripts)
-    if outcome.problems or not all(state.reachable for state in states.values()):
+    if outcome.blocked or not all(state.reachable for state in states.values()):
         return 3
     if _route_check(outcome, hosts, executor, installed_only=True):
         return 3

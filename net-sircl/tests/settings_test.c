@@ -140,6 +140,17 @@ static void check_channel_tuner(void) {
 int main(void) {
   setting("NET_SIRCL_OOB_ADDR", "127.0.0.1");
   check_channel_tuner();
+  const char *deadlines[] = {"NET_SIRCL_CONNECT_TIMEOUT_MS", "NET_SIRCL_REQUEST_TIMEOUT_MS"};
+  const char *invalid_deadlines[] = {"", "0", "-1", "+1", " 100", "1x", "2147483648", "999999999999999999999"};
+  for (unsigned d = 0; d < 2; ++d) {
+    for (unsigned i = 0; i < sizeof invalid_deadlines / sizeof invalid_deadlines[0]; ++i) {
+      setting(deadlines[d], invalid_deadlines[i]);
+      void *badctx = NULL;
+      assert(sircl_init(&badctx, 0, NULL, capture, NULL) == ncclInvalidArgument);
+      assert(!badctx && !g.refs && !g.ndevs);
+    }
+    setting(deadlines[d], NULL);
+  }
   setting("NCCL_IB_TIMEOUT", "13");
   setting("NCCL_IB_RETRY_CNT", "2");
   valid(NULL, NULL, 20, 7); /* NCCL's environment does not override plugin settings. */

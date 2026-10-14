@@ -47,6 +47,24 @@ class NetSirclTests(unittest.TestCase):
         cls.build.cleanup()
 
     # -- layer tests --
+    def test_silent_and_lost_peers_fail_and_close(self):
+        exe = Path(self.build.name) / "failure_test"
+        subprocess.run([os.environ.get("CC", "cc"), *FLAGS, *STANDIN_FLAGS,
+                        str(HERE / "tests/failure_test.c"), str(STANDIN / "shm_verbs.c"),
+                        *CORE_SOURCES, "-Wl,--wrap=sccl_emu_ibv_post_send", "-o", str(exe)], check=True)
+        for peer in (1, 3):
+            for mode in ("send", "recv", "flight", "lost"):
+                with self.subTest(peer=peer, mode=mode):
+                    fabric = f"/sircl-failure-{os.getpid()}-{peer}-{mode}"
+                    env = {k: v for k, v in os.environ.items() if not k.startswith("NET_SIRCL_")}
+                    env["SIRCL_EMU_FABRIC"] = fabric
+                    try:
+                        result = subprocess.run([str(exe), str(self.topology), mode, str(peer)],
+                                                env=env, capture_output=True, text=True, timeout=8)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    finally:
+                        (Path("/dev/shm") / fabric.lstrip("/")).unlink(missing_ok=True)
+
     def test_short_request_provider_cost(self):
         topology = Path(self.build.name) / "short.topology"
         topology.write_text("hosts a b c d\ncabling path\nport0 emu0 emu1\nport1 emu2 emu3\n")

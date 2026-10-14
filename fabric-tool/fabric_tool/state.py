@@ -199,7 +199,7 @@ class FilterEntry:
 
     def matches(self, planned: RelayFilter) -> bool:
         return (self.problem is None and self.kind == "flower" and self.chain == 0 and self.pref == planned.pref
-                and self.protocol == planned.protocol and self.handle == planned.handle and self.skip_sw
+                and self.protocol == planned.protocol and self.handle == planned.handle and self.skip_sw and self.in_hw
                 and self.dst_mac == planned.next_mac.lower() and self.new_type == planned.new_type
                 and self.out_dev == planned.out_netdev)
 

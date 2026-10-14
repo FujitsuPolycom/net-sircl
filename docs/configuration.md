@@ -39,6 +39,8 @@ and the fourth relays.
 | `NET_SIRCL_CHUNK` | 65536 | maximum payload bytes per independently completed chunk; adapts to available credit |
 | `NET_SIRCL_OOB_ADDR` | first IPv4 of `NCCL_SOCKET_IFNAME` | address for the connection exchange |
 | `NET_SIRCL_CONNECT_TIMEOUT_MS` | 60000 | connect/accept deadline |
+| `NET_SIRCL_REQUEST_TIMEOUT_MS` | 60000 | deadline for a pending send/receive, including waiting for clear-to-send |
+| `NET_SIRCL_CHANNELS` | 8 on topologies with more than two hosts; otherwise 0 | tuner collective limit, 1–64; 0 leaves selection to NCCL; explicit NCCL channel settings take precedence |
 | `NET_SIRCL_IB_TIMEOUT` | 20 | RC ACK timeout exponent, decimal 1-31; one timeout is 4.096 microseconds times 2^value |
 | `NET_SIRCL_IB_RETRY_CNT` | 7 | RC transport retry count, decimal 0-7 (0 disables retries); RNR retries remain 7 |
 | `NET_SIRCL_RELAXED_ORDERING` | 1 | register memory with relaxed ordering |
@@ -51,6 +53,23 @@ admission. Invalid window maps fail initialization; a relayed peer's override ca
 directional cap. A smaller override lowers every function's source allowance on that host.
 Direct peers have window 0 unless explicitly capped. The directional budget accepts decimal digits only;
 empty, signed, malformed, overflowing and out-of-range values fail initialization.
+
+Both timeout settings accept decimal integers in 1–2147483647 milliseconds.
+Invalid settings fail initialization. Request deadlines start at receive submission
+or the sender's first wait for clear-to-send; after admission, the send gets its
+own completion deadline. They are total request bounds, not idle timers, so choose
+a value larger than the slowest expected individual transfer. Health is checked
+on the first and every 4096th waiting progress call; detection requires NCCL to
+continue polling. Peer loss or deadline expiry returns `ncclRemoteError` and stays
+failed on subsequent calls. Relayed connections also poison their shared allowance,
+so abandoned credits cannot fund another transfer. Close abandons QPs without
+waiting for remote recovery. Use an outer application timeout too: the plugin cannot
+time out CUDA or a process that no longer calls it.
+
+If a relay loses a rule, `fabric-tool verify` reports the missing filter and returns
+nonzero. A filter with no `in_hw` flag also fails verification, even if its actions
+still match. Verification is read-only; restore through the normal reviewed apply
+workflow before creating a fresh process group.
 
 The IB timeout and retry count are read at the first initialization and shared by live communicators.
 Unset values use the defaults; empty, malformed, overflowing or out-of-range values fail initialization.

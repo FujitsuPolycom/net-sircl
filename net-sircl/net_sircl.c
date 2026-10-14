@@ -133,7 +133,7 @@ static struct {
   int speed_mbps;
   int traffic_class;
   int relaxed_ordering;
-  int connect_timeout_ms;
+  int connect_timeout_ms, request_timeout_ms;
   int ib_timeout, ib_retry_cnt;
   int relay_budget, nhosts, owner_fd, route_derived;
   uint64_t policy;
@@ -155,6 +155,7 @@ struct mr {
 struct comm;
 struct req {
   int used, is_send, done;
+  int64_t started_ms;
   struct comm *c;
   uint32_t seq, slot;
   uint32_t total, posted;
@@ -187,6 +188,8 @@ struct comm {
   uint64_t chunks;
   int peer_position, lane;
   unsigned waits;          /* calls since the last peer-loss check */
+  int64_t cts_wait_ms;
+  ncclResult_t error;
   struct req reqs[NET_SIRCL_SLOTS];
 };
 
@@ -625,6 +628,10 @@ static ncclResult_t sircl_init(void **ctx, uint64_t commId, ncclNetCommConfig_v1
       r = env_range("NET_SIRCL_RELAY_BUDGET", RELAY_BUDGET_DEFAULT, 65536, RELAY_BUDGET_DEFAULT, &g.relay_budget);
     if (r == ncclSuccess)
       r = env_range("NET_SIRCL_POSITION", -1, 0, MAX_POSITIONS - 1, &g.position);
+    if (r == ncclSuccess)
+      r = env_range("NET_SIRCL_CONNECT_TIMEOUT_MS", 60000, 1, INT_MAX, &g.connect_timeout_ms);
+    if (r == ncclSuccess)
+      r = env_range("NET_SIRCL_REQUEST_TIMEOUT_MS", 60000, 1, INT_MAX, &g.request_timeout_ms);
     if (r != ncclSuccess) goto init_done;
     g.owner_fd = -1;
     g.nhosts = 0;
@@ -635,7 +642,6 @@ static ncclResult_t sircl_init(void **ctx, uint64_t commId, ncclNetCommConfig_v1
     g.speed_mbps = (int)env_long("NET_SIRCL_SPEED_MBPS", 100000);
     g.traffic_class = (int)env_long("NET_SIRCL_TC", 0);
     g.relaxed_ordering = (int)env_long("NET_SIRCL_RELAXED_ORDERING", 1);
-    g.connect_timeout_ms = (int)env_long("NET_SIRCL_CONNECT_TIMEOUT_MS", 60000);
     g.oob_addr = oob_address();
     if (g.chunk < 4096) g.chunk = 4096;
     memset(g.routes, 0, sizeof g.routes);
@@ -1327,10 +1333,16 @@ static ncclResult_t send_progress(struct comm *c, struct req *q) {
   return ncclSuccess;
 }
 
-static ncclResult_t check_peer(struct comm *c) {
-  if (++c->waits % PEER_CHECK_EVERY) return ncclSuccess;
-  if (!peer_gone(c)) return ncclSuccess;
-  WARN("net-sircl: the peer at position %d closed its connection with requests outstanding", c->peer_position);
+static ncclResult_t check_wait(struct comm *c, int64_t started_ms) {
+  if (c->error) return c->error;
+  if (c->waits++ % PEER_CHECK_EVERY) return ncclSuccess;
+  if (peer_gone(c)) {
+    WARN("net-sircl: the peer at position %d closed its connection with requests outstanding", c->peer_position);
+  } else if (now_ms() - started_ms >= g.request_timeout_ms) {
+    WARN("net-sircl: request to position %d timed out after %d ms; check peer progress and fabric-tool verify",
+         c->peer_position, g.request_timeout_ms);
+  } else return ncclSuccess;
+  c->error = ncclRemoteError;
   if (c->win) c->win->error = ncclRemoteError;
   return ncclRemoteError;
 }
@@ -1345,7 +1357,11 @@ static ncclResult_t isend_locked(void *sendComm, void *data, size_t size, int ta
   uint32_t slot = c->seq % NET_SIRCL_SLOTS;
   struct req *q = &c->reqs[slot];
   if (q->used) return ncclSuccess;
-  if (__atomic_load_n(&c->ctrl->cts_seq[slot], __ATOMIC_ACQUIRE) != c->seq + 1) return check_peer(c);
+  if (__atomic_load_n(&c->ctrl->cts_seq[slot], __ATOMIC_ACQUIRE) != c->seq + 1) {
+    if (!c->cts_wait_ms) c->cts_wait_ms = now_ms();
+    return check_wait(c, c->cts_wait_ms);
+  }
+  c->cts_wait_ms = 0;
   struct net_sircl_cts e = c->ctrl->cts[slot];
   if ((int)e.tag != tag) {
     WARN("net-sircl: send tag %d meets receive tag %u in slot %u", tag, e.tag, slot);
@@ -1357,6 +1373,7 @@ static ncclResult_t isend_locked(void *sendComm, void *data, size_t size, int ta
   }
   struct mr *m = mhandle;
   memset(q, 0, sizeof *q);
+  q->started_ms = now_ms();
   q->used = q->is_send = 1;
   q->c = c;
   q->seq = c->seq++;
@@ -1382,8 +1399,9 @@ static ncclResult_t sircl_isend(void *sendComm, void *data, size_t size, int tag
   if (c->win) pthread_mutex_lock(&c->win->lock);
   /* Submission retries must make progress even before NCCL owns a request
    * to test. No CUDA operation or stream wait participates in credit return. */
-  ncclResult_t r = c->win ? poll_cq(c) : ncclSuccess;
+  ncclResult_t r = c->error ? c->error : (c->win ? poll_cq(c) : ncclSuccess);
   if (r == ncclSuccess) r = isend_locked(sendComm, data, size, tag, mhandle, phandle, request);
+  if (r == ncclRemoteError || r == ncclSystemError) c->error = r;
   if (c->win) pthread_mutex_unlock(&c->win->lock);
   return r;
 }
@@ -1462,6 +1480,7 @@ static ncclResult_t irecv_locked(void *recvComm, int n, void **data, size_t *siz
   e->size = sizes[0] > MAX_NET_BYTES ? MAX_NET_BYTES : (uint32_t)sizes[0];
   e->tag = (uint32_t)tags[0];
   memset(q, 0, sizeof *q);
+  q->started_ms = now_ms();
   q->used = 1;
   q->c = c;
   q->seq = c->seq++;
@@ -1479,8 +1498,9 @@ static ncclResult_t sircl_irecv(void *recvComm, int n, void **data, size_t *size
   *request = NULL;
   struct comm *c = recvComm;
   if (c && c->win) pthread_mutex_lock(&c->win->lock);
-  ncclResult_t r = c && c->win ? poll_cq(c) : ncclSuccess;
+  ncclResult_t r = c && c->error ? c->error : (c && c->win ? poll_cq(c) : ncclSuccess);
   if (r == ncclSuccess) r = irecv_locked(recvComm, n, data, sizes, tags, mhandles, phandles, request);
+  if (c && (r == ncclRemoteError || r == ncclSystemError)) c->error = r;
   if (c && c->win) pthread_mutex_unlock(&c->win->lock);
   return r;
 }
@@ -1539,6 +1559,7 @@ static ncclResult_t advance(struct comm *c) {
 
 /* Caller holds the shared window lock across progress and request retirement. */
 static ncclResult_t poll_cq(struct comm *c) {
+  if (c->error) return c->error;
   if (!c->win) return drain(c);
   struct window *w = c->win;
   if (w->error) return w->error;
@@ -1573,11 +1594,12 @@ static ncclResult_t test_locked(void *request, int *done, int *sizes) {
   ncclResult_t r = poll_cq(c);
   if (r != ncclSuccess) return r;
   if (q->is_send) {
-    if (!q->done) return check_peer(c);
+    if (!q->done) return check_wait(c, q->started_ms);
     if (sizes) *sizes = (int)q->total;
   } else {
-    if (!q->cts_done) return check_peer(c);
-    if (__atomic_load_n(&c->ctrl->done_seq[q->slot], __ATOMIC_ACQUIRE) != q->seq + 1) return check_peer(c);
+    if (!q->cts_done) return check_wait(c, q->started_ms);
+    if (__atomic_load_n(&c->ctrl->done_seq[q->slot], __ATOMIC_ACQUIRE) != q->seq + 1)
+      return check_wait(c, q->started_ms);
     uint32_t got = __atomic_load_n(&c->ctrl->done_size[q->slot], __ATOMIC_ACQUIRE);
     if (q->shadow && got) memcpy(q->user, q->shadow, got);
     if (sizes) *sizes = (int)got;
@@ -1593,6 +1615,7 @@ static ncclResult_t sircl_test(void *request, int *done, int *sizes) {
   struct comm *c = ((struct req *)request)->c;
   if (c->win) pthread_mutex_lock(&c->win->lock);
   ncclResult_t r = test_locked(request, done, sizes);
+  if (r != ncclSuccess) c->error = r;
   if (c->win) pthread_mutex_unlock(&c->win->lock);
   return r;
 }
