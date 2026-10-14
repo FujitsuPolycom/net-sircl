@@ -1,10 +1,10 @@
 {
   "core_abi": 1,
   "core_version": "0.1.1",
-  "plugin_version": "0.1.1",
+  "plugin_version": "0.1.2",
   "plugin_wire_version": 6,
   "fabric_tool": {
-    "version": "0.1.1",
+    "version": "0.1.2",
     "upstream_file_sha256": {
       "DESIGN.md": "ba6d0fb875e8758aceaec71fc80716a3a6dabec7dca47bf6ab51f79aba80bc72",
       "HARDWARE-TEST-PLAN.md": "ef4a8a26193cfc81913d6b253136c9ca66c3dd8f873a55601ef429c32c0918d9",
@@ -48,7 +48,8 @@
       "Public plan schema v2 uses lanes; marker executable is fabric-tool-marker.",
       "CPU tests run without external project imports; external comparison and network-simulator tests are omitted.",
       "Documentation describes standalone usage and validation boundaries.",
-      "Marker security regressions run standalone with synthetic host state and local shell checks."
+      "Marker security regressions run standalone with synthetic host state and local shell checks.",
+      "0.1.2 verify rejects missing hardware offload and ownership blockers; CPU loss/recovery fixtures added."
     ]
   },
   "archive_tool": "transport-core/tools/package.py",
@@ -111,8 +112,10 @@
     "spark_transport/nccl/net-sircl maps to net-sircl; spark_transport/transport-core maps to transport-core.",
     "Standalone build, CI, archive tooling, documentation and synthetic examples retained from public v0.1.0.",
     "External SIRCL/libsircl comparison tests and proxy-adaptation tools remain excluded.",
-    "All plugin C/C++/header bytes match the candidate; core version macro and matching CPU assertion use 0.1.1, ABI 1.",
-    "Fabric-tool retains the public v0.1.0 implementation and its separate 47de221a provenance; only its distribution version changes to 0.1.1. It is absent from the candidate branch."
+    "0.1.2 adds the tuner v4 policy, finite request deadlines and sticky transport errors; wire remains 6.",
+    "Bundled transport-core stays at 0.1.1 ABI 1 with unchanged source identity.",
+    "Fabric-tool 0.1.2 requires hardware-offloaded relay rules and returns failure for verify blockers.",
+    "Corrected PyTorch graph lifetime check, channel and runtime matrices, fault-injection tests and public documentation."
   ],
   "source_sha256": {
     "net-sircl/nccl/common.h": "60d138a9f2eb836161b2d0040901d38de5d28f7257b32f8b2d8b7f4e3935b0d1",
@@ -169,7 +172,8 @@
     "transport-core/tests/test_verbs.c": "ec84a8971e48c2fd098dc06d630733af2a5f21c6cd6e9eaa89dca67a9871c220",
     "net-sircl/net_sircl_tuner.h": "30190717119d61bf1f25b184b1b1ad8f661ac8915c888e55ae013bff2a344bf1",
     "net-sircl/nccl/tuner.h": "8450583204696fe008b01ab92cfc86d5e8e5bfe1b722b02360be58d599f00148",
-    "net-sircl/nccl/tuner_v4.h": "1164e13f7096c21c3c02fda1ddcb13d52a9d74e89a42cbf287ac74710861c9cd"
+    "net-sircl/nccl/tuner_v4.h": "1164e13f7096c21c3c02fda1ddcb13d52a9d74e89a42cbf287ac74710861c9cd",
+    "net-sircl/tests/failure_test.c": "6c7c79f4e689b037ea74c6a2cb685794d624fffb515d2e3c5ec764958b155c42"
   },
   "upstream_source_sha256": {
     "net-sircl/nccl/common.h": "60d138a9f2eb836161b2d0040901d38de5d28f7257b32f8b2d8b7f4e3935b0d1",
@@ -224,5 +228,11 @@
     "transport-core/tests/fake_verbs/infiniband/verbs.h": "8c2173547a2169bb455d103b7842463168e75d4350f4434d92ab5dabc353c64c",
     "transport-core/tests/test_core.c": "043000d764bddd713905890fea21d4be577b1ef087cdda686c8f6e351fc31b66",
     "transport-core/tests/test_verbs.c": "ec84a8971e48c2fd098dc06d630733af2a5f21c6cd6e9eaa89dca67a9871c220"
+  },
+  "tuner_headers": {
+    "source_tag": "NVIDIA/nccl v2.32.3-1",
+    "source_path": "src/include/plugin/tuner/tuner_v4.h",
+    "sha256": "1164e13f7096c21c3c02fda1ddcb13d52a9d74e89a42cbf287ac74710861c9cd",
+    "function_enum": "src/include/nccl_common.h ncclFunc_t (in nccl/tuner.h)"
   }
 }

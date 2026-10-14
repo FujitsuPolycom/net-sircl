@@ -2,7 +2,7 @@ PYTHON ?= python3
 PREFIX ?= /usr/local
 VERSION := $(shell cat net-sircl/VERSION)
 
-.PHONY: all emu check check-e2e check-e2e-if-available install clean package check-release
+.PHONY: check-teardown check-channels all emu check check-e2e check-e2e-if-available install clean package check-release
 all:
 	$(MAKE) -C transport-core all
 	$(MAKE) -C net-sircl all
@@ -18,6 +18,8 @@ check-e2e: emu
 	$(PYTHON) scripts/check_e2e.py
 check-e2e-if-available: emu
 	$(PYTHON) scripts/check_e2e.py --if-available
+check-channels: emu
+	$(PYTHON) scripts/check_channels.py
 check-teardown: emu
 	$(PYTHON) scripts/check_teardown.py
 install:
@@ -25,7 +27,7 @@ install:
 	$(MAKE) -C fabric-tool install PREFIX=$(PREFIX) DESTDIR=$(DESTDIR)
 	install -m 0644 README.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/README.md
 	install -m 0644 NOTICE $(DESTDIR)$(PREFIX)/share/doc/net-sircl/NOTICE
-	install -m 0644 RELEASE_NOTES-0.1.1.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/RELEASE_NOTES-0.1.1.md
+	install -m 0644 RELEASE_NOTES-*.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/
 	install -d $(DESTDIR)$(PREFIX)/share/doc/net-sircl/net-sircl
 	install -m 0644 net-sircl/ROUTE-ALLOWANCE.md net-sircl/PROFILING.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/net-sircl/
 	install -m 0644 SOURCE.json $(DESTDIR)$(PREFIX)/share/doc/net-sircl/SOURCE.json
@@ -53,6 +55,8 @@ help:
 	@echo "check                  Run CPU and release tests"
 	@echo "check-e2e              Run single-GPU NCCL tests (prerequisites required)"
 	@echo "check-e2e-if-available  Run NCCL tests or explicitly skip missing prerequisites"
+	@echo "check-teardown         Four-rank PyTorch graph teardown (GPU required)"
+	@echo "check-channels         Actual automatic/override channels (NCCL 2.32.3 GPU)"
 	@echo "install                Install plugin, fabric-tool, examples and docs"
 	@echo "package                Archive git ls-files into dist/ (Git checkout required)"
 	@echo "check-release          Scan tracked source text for private data"

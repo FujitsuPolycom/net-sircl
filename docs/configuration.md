@@ -91,16 +91,12 @@ all forwarding hosts, including hosts outside the active communicator.
 JSON profiling. Unset or empty disables it. See [profiling](../net-sircl/PROFILING.md)
 for the schema, overhead and `net-sircl/tools/summarize_profile.py`.
 
-## Channel recommendation
+## Channel policy
 
-Set `NCCL_MAX_NCHANNELS=8` on every rank before NCCL initialization for relayed
-paths, with channel minima unset. This is an application setting; the plugin
-only emits a startup advisory when relayed peers are configured and none of
-`NCCL_MAX_NCHANNELS`, `NCCL_MAX_NRINGS` or `NCCL_MAX_CTAS` is present. It cannot
-observe application maxCTAs or tuner decisions. An explicit environment entry,
-even an invalid value, is left for NCCL to interpret. Direct-only routes produce
-no advisory. [Release measurements](../RELEASE_NOTES-0.1.1.md) cover the four-host
-path and describe the unmeasured cap-8 cases.
+The bundled tuner supplies an eight-channel collective limit on multi-node
+topologies with more than two hosts. Two-host topologies keep NCCL defaults.
+Explicit NCCL channel settings disable the tuner limit. See
+[automatic policy, override precedence and source attribution](channels.md).
 
 Set `NCCL_NET_PLUGIN` to the installed library and `NCCL_NET=sircl` to require it.
 Use `NCCL_ALGO=Ring` on rings and paths and `NCCL_DEBUG=INFO

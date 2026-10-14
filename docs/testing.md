@@ -16,7 +16,7 @@ test plugin. `make check` runs:
 
 - transport-core: two C test executables for concurrent window arithmetic, abort/progress
   callbacks and emulated verbs, plus four Python discovery/topology tests.
-- net-sircl: 24 Python tests, including multiprocess transfer, window, lane,
+- net-sircl: Python tests, including multiprocess transfer, window, lane,
   teardown, peer-loss and deadline tests, fixed topology expectations and
   the real-NIC library's v7–v12 export check, ABI layout calls, route/ACK
   capacity oracle, oldest-first credit, partial completions and profiling checks. That export check needs rdma-core
@@ -39,7 +39,7 @@ CPU checks establish neither hardware qualification nor performance.
 ## Single-GPU NCCL emulation
 
 `make check-e2e` requires CUDA-enabled PyTorch, a CUDA GPU and runtime NCCL
-2.32.3. Set `PYTHON` to the desired interpreter; if needed, set `LD_PRELOAD`
+2.28.9, 2.31.2 or 2.32.3. Set `PYTHON` to the desired interpreter; if needed, set `LD_PRELOAD`
 to a compatible unpatched NCCL library. The test queries the loaded runtime.
 
 ```sh
@@ -95,7 +95,7 @@ make package
 python3 scripts/check_release_safety.py .
 ```
 
-The archive is `dist/net-sircl-0.1.1.tar.gz`, built from `git ls-files` in
+The archive is `dist/net-sircl-0.1.2.tar.gz`, built from `git ls-files` in
 this repository, using current tracked-file bytes and fixed timestamps,
 ownership and modes. Stage added or deleted files before packaging; a release
 should be built from a clean commit. Untracked files cannot ship. A tracked
@@ -119,3 +119,17 @@ changing packaging or the component version changes this digest.
 [SOURCE.json](../SOURCE.json) separates shipped checksums, candidate provenance
 and immutable historical 0.1.0 measured hashes. They do not qualify this binary.
 See [retained compatibility code](transport-core.md#retained-compatibility-code).
+
+## Hardening regression checks
+
+`make check-teardown` runs a four-rank path through PyTorch, with a 15-second
+bound on destruction after releasing graphs. The optional
+`scripts/check_teardown.py --negative-controls` reproduces retained-graph waits
+with both sircl and NCCL Socket. `make check-channels` checks automatic path/cycle
+limits, the direct-pair stock-tuner control, overrides and tuner disablement.
+Use the site's GPU reservation for these commands.
+
+[Compatibility](compatibility.md) documents the native runtime matrix and its
+reproducer. CPU fault injection covers silent peers, lost completion delivery,
+sticky errors and bounded close. Fabric tests cover missing forwarding rules,
+lost `in_hw`, unreachable relays and verify blockers without contacting a host.

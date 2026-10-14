@@ -7,7 +7,11 @@ It supplies RDMA connections through NCCL's network-plugin (`ext-net`) interface
 NCCL keeps its collective algorithms and CUDA-graph support. PyTorch and other
 NCCL users can load the plugin without a framework patch.
 
-Version **0.1.1**, connection protocol (wire version) **6**: every host in a job
+fabric-tool installs NIC relay rules on the middle Sparks and IP routes on
+senders. It also manages the sender marker that tags RDMA packets with the
+remaining relay count.
+
+Version **0.1.2**, connection protocol (wire version) **6**: every host in a job
 must use a plugin with the same wire version.
 
 ## Requirements
@@ -17,8 +21,9 @@ must use a plugin with the same wire version.
   path of four. This release is research-only.
 - Linux with working NVIDIA drivers and RoCE v2 networking. No minimum DGX OS
   version is established by this repository's evidence.
-- NCCL **2.32.3**, the tested runtime, with the v12 network-plugin API. The library also exports APIs v7-v11;
-  CPU ABI checks do not qualify every NCCL runtime on hardware.
+- NCCL **2.27.7, 2.28.9, 2.31.2 or 2.32.3** for the tested emulation
+  matrix; only 2.32.3 has retained 0.1.1 Spark hardware evidence. The library
+  exports ext-net v7-v12. See [runtime and framework compatibility](docs/compatibility.md).
 - A C11 compiler, Make, Python 3.10 or later, and rdma-core development headers.
   CPU tests also need pytest. CUDA-enabled PyTorch runs the example below.
 - IPv4 addresses on the cabled RDMA interfaces and a reachable IP network for
@@ -96,7 +101,7 @@ the first matching interface to its peers. It does not parse NCCL's `^`
 `NET_SIRCL_OOB_ADDR` to this host's reachable IPv4 address instead.
 
 Expect `Loaded net plugin sircl (v12)`, `Using network sircl` and
-`net-sircl 0.1.1 (wire version 6)`. Every rank prints `PASS`. A further line,
+`net-sircl 0.1.2 (wire version 6)`. Every rank prints `PASS`. A further line,
 `net-sircl transport-core 0.1.1 ABI 1 source <sha256>`, identifies the bundled
 RDMA library's source files; see [source identity](docs/testing.md#source-identity).
 
@@ -151,15 +156,23 @@ On a four-host DGX Spark path, NCCL 2.32.3 Ring with eight channels reaches
 results with zero mandatory drop/error deltas. Graph L05 completes in 44.80 s.
 These measurements use candidate source ee91dcc6, not the standalone release
 binary. [Release notes](RELEASE_NOTES-0.1.1.md) give conditions, sample counts,
-controls, other collectives and the pending final-pass section.
+controls, other collectives and the final hardware pass.
 
-For relayed jobs, set `NCCL_MAX_NCHANNELS=8` on every rank before NCCL
-initializes, leaving channel minima unset. The plugin emits an advisory when
-no supported cap environment entry exists; it does not apply the cap itself.
-Cap 8 on direct pairs and eight-rank jobs is not measured by these records.
-Historical plugin-versus-stock results remain in [measurements](docs/measurements.md).
+The bundled tuner automatically limits collectives to eight active channels
+on topologies with more than two hosts. A two-host topology retains NCCL's
+default tuning. Explicit NCCL channel settings and external tuners take
+precedence; see [channel policy and limitations](docs/channels.md). The allocated
+channel count in INIT can exceed the active count printed in TUNING logs.
+This automatic policy has GPU emulation coverage; its hardware qualification
+is pending. Historical plugin-versus-stock results remain in
+[measurements](docs/measurements.md).
 
 ## Limitations
+
+SGLang and full vLLM serving workloads have not been tested with this release.
+NCCL loading and collective tests do not establish framework qualification.
+PyTorch graphs must be reset/released before process-group destruction; the
+corrected hardware teardown test remains to be run on Sparks.
 
 The plugin stages data through host memory. GPU Direct RDMA, DMA-BUF and
 grouped receives are unsupported. Other GPU/NIC models, switches, multiple GPUs
@@ -178,7 +191,7 @@ port counted six ACK timeouts. No relay was involved, and three further runs
 of that line passed. Whether the cause is the cable, the port or the plugin is
 not yet established.
 
-See [testing and CI](docs/testing.md), [release notes](RELEASE_NOTES-0.1.1.md)
+See [testing and CI](docs/testing.md), [release notes](RELEASE_NOTES-0.1.2.md)
 and [source provenance](SOURCE.json). `make help` lists build and test targets.
 
 Apache-2.0: [LICENSE](LICENSE) and [NOTICE](NOTICE) retain attribution to
