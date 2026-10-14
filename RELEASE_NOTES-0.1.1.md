@@ -154,11 +154,11 @@ hosts were checked for every job.
 
 | Layout | 8 MiB | 16 MiB | 32 MiB | 64 MiB | 128 MiB | 256 MiB |
 |---|---|---|---|---|---|---|
-| Path of four, GB/s | 14.7-17.0 at 8-256 MiB; 1.07-1.15 of the 0.1.0-era baseline at 16-256 MiB | | | | | |
 | Cycle of eight, ratio to stock NCCL | 1.02 | 1.20 | 1.02 | 1.00 | 0.96 | 0.97 |
 | Direct pair, ratio to stock NCCL | 1.89 | 1.10 | 0.97 | 1.06 | 1.19 | 1.12 |
 
-- Path of four: all 13 nccl-tests lines passed, exact; the CUDA-graph
+- Path of four: 14.7-17.0 GB/s all-reduce at 8-256 MiB, 1.07-1.15 of the
+  0.1.0-era baseline at 16-256 MiB; all 13 nccl-tests lines passed, exact; the CUDA-graph
   all-reduce line took 45.8 s; all-gather 14.5-14.7 GB/s and broadcast
   24.3 GB/s at 256 MiB. Stock NCCL cannot run this path's relayed edge.
 - Cycle of eight: the CUDA-graph all-reduce line took 35.4 s. Without the
