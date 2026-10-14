@@ -22,12 +22,12 @@ CPPFLAGS += -I$(CORE)/include -include .core-build/core_identity.h
 
 all: libnccl-net-sircl.so
 
-libnccl-net-sircl.so: net_sircl.c net_sircl.h $(wildcard nccl/*.h) VERSION $(CORE_SOURCES) $(CORE_HEADERS)
+libnccl-net-sircl.so: net_sircl.c net_sircl.h net_sircl_profile.h $(wildcard nccl/*.h) VERSION $(CORE_SOURCES) $(CORE_HEADERS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared -DNET_SIRCL_RELEASE='"$(VERSION)"' -I. net_sircl.c $(CORE_SOURCES) -o $@ -libverbs
 
 emu: libnccl-net-sircl-emu.so
 
-libnccl-net-sircl-emu.so: net_sircl.c net_sircl.h $(wildcard nccl/*.h) $(STANDIN)/shm_verbs.c VERSION $(CORE_SOURCES) $(CORE_HEADERS) $(CORE)/src/shm_verbs.c
+libnccl-net-sircl-emu.so: net_sircl.c net_sircl.h net_sircl_profile.h $(wildcard nccl/*.h) $(STANDIN)/shm_verbs.c VERSION $(CORE_SOURCES) $(CORE_HEADERS) $(CORE)/src/shm_verbs.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared -DNET_SIRCL_RELEASE='"$(VERSION)"' -DNET_SIRCL_STANDIN -I. \
 	  -I$(STANDIN)/fake_verbs -I$(STANDIN) net_sircl.c $(STANDIN)/shm_verbs.c $(CORE_SOURCES) -o $@
 
@@ -38,6 +38,8 @@ check:
 install: libnccl-net-sircl.so
 	install -D -m 0755 libnccl-net-sircl.so $(DESTDIR)$(PREFIX)/lib/libnccl-net-sircl.so
 	install -D -m 0644 README.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/README.md
+	install -D -m 0644 ROUTE-ALLOWANCE.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/ROUTE-ALLOWANCE.md
+	install -D -m 0644 PROFILING.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/PROFILING.md
 	install -D -m 0644 LICENSE $(DESTDIR)$(PREFIX)/share/doc/net-sircl/LICENSE
 	install -D -m 0644 NOTICE $(DESTDIR)$(PREFIX)/share/doc/net-sircl/NOTICE
 	install -D -m 0644 $(CORE)/NOTICE $(DESTDIR)$(PREFIX)/share/doc/net-sircl/TRANSPORT-CORE-NOTICE
@@ -52,6 +54,6 @@ clean:
 # The source digest covers transport-core sources, headers and tools, not the compiled library.
 .core-build/core_identity.h: $(wildcard $(CORE)/src/*.c) $(wildcard $(CORE)/include/*.h) $(wildcard $(CORE)/include/sircl_core/*) $(wildcard $(CORE)/tools/*.py) $(CORE)/VERSION
 	$(PYTHON) $(CORE)/tools/identity.py --output $@
-libnccl-net-sircl.so libnccl-net-sircl-emu.so: .core-build/core_identity.h
+libnccl-net-sircl.so libnccl-net-sircl-emu.so: .core-build/core_identity.h net_sircl_compat.h net_sircl_routes.h
 
 CPPFLAGS += -DSIRCL_CORE_STATIC

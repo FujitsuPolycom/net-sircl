@@ -19,7 +19,7 @@ static void *worker(void *unused) {
 static int poller(void *ctx, unsigned budget) { (*(unsigned *)ctx)++; return (int)budget; }
 static int broken(void *ctx, unsigned budget) { (void)ctx; return (int)budget + 1; }
 int main(void) {
-  CHECK(sircl_core_abi() == 1 && !strcmp(sircl_core_version(), "0.1.0"));
+  CHECK(sircl_core_abi() == 1 && !strcmp(sircl_core_version(), "0.1.1"));
   CHECK(sircl_core_window_room(64, 64) == 0 && sircl_core_window_room(64, 65) == 0);
   CHECK(sircl_core_window_room(0, 10) == UINT64_MAX);
   CHECK(!sircl_core_window_claim(&flight, &high, 64, 65, 0));

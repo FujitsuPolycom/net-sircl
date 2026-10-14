@@ -16,9 +16,10 @@ test plugin. `make check` runs:
 
 - transport-core: two C test executables for concurrent window arithmetic, abort/progress
   callbacks and emulated verbs, plus four Python discovery/topology tests.
-- net-sircl: 14 Python tests, including multiprocess transfer, window, lane,
+- net-sircl: 24 Python tests, including multiprocess transfer, window, lane,
   teardown, peer-loss and deadline tests, fixed topology expectations and
-  the real-NIC library's v12 export check. That export check needs rdma-core
+  the real-NIC library's v7–v12 export check, ABI layout calls, route/ACK
+  capacity oracle, oldest-first credit, partial completions and profiling checks. That export check needs rdma-core
   headers and `nm`; CI installs both.
 - fabric-tool: standalone pytest cases for topology, plans, facts, exact
   command forms, marker ownership/digest and log-parent refusals, boot previews
@@ -26,7 +27,7 @@ test plugin. `make check` runs:
   and local Bash checks without privileged host changes. No external
   checkout or full-network simulator is used. These do not exercise real
   apply/verify/remove across hosts or restoration after an actual reboot.
-- Release contracts: measured C/header hashes, example routes, embedded core
+- Release contracts: shipped C/C++/header hashes, example routes, embedded core
   identity, and archive reproducibility/completeness. The archive test creates
   an untracked file under docs and checks that the archive still contains
   exactly `git ls-files`. This test skips in an extracted archive without Git
@@ -60,6 +61,17 @@ Logs and JSON summaries go under `test-results/`, which Git ignores and
 before sharing. The emulator moves bytes in shared memory and models no NIC,
 cable, physical relay queue or loss recovery.
 
+## Native GPU backend
+
+`net-sircl/tests/emulation/nccl_compat_e2e.cc` is an optional C++ backend
+using public CUDA/NCCL APIs. Compile it with a C++ compiler and CUDA and NCCL
+development headers/libraries, then pass its executable to
+`net-sircl/tests/emulation/nccl_e2e.py --launch --native EXECUTABLE --plugin
+ABSOLUTE_PLUGIN_PATH --out OUTPUT_DIRECTORY`. Add `--windowed` for relayed
+credit emulation. `NET_SIRCL_TEST_LARGE_GRAPHS=1` adds 20 graph replays at each
+size from 8 to 256 MiB, both in and out of place, with changing inputs and
+exact checks; use `--timeout 900`. This backend is not required on CPU CI.
+
 ## CI
 
 The GitHub Actions job runs on `ubuntu-24.04` and `ubuntu-24.04-arm`:
@@ -83,7 +95,7 @@ make package
 python3 scripts/check_release_safety.py .
 ```
 
-The archive is `dist/net-sircl-0.1.0.tar.gz`, built from `git ls-files` in
+The archive is `dist/net-sircl-0.1.1.tar.gz`, built from `git ls-files` in
 this repository, using current tracked-file bytes and fixed timestamps,
 ownership and modes. Stage added or deleted files before packaging; a release
 should be built from a clean commit. Untracked files cannot ship. A tracked
@@ -100,9 +112,10 @@ scanning its extracted text with the same rules.
 
 ## Source identity
 
-The startup line `net-sircl transport-core 0.1.0 ABI 1 source <sha256>` contains
+The startup line `net-sircl transport-core 0.1.1 ABI 1 source <sha256>` contains
 a digest of transport-core's C sources, headers, Python tools and VERSION.
 It is not a compiled-library checksum. Removing Python adaptation tools and
-changing packaging changes this digest while preserving every C/header byte.
-[SOURCE.json](../SOURCE.json) records the measured source hashes separately.
+changing packaging or the component version changes this digest.
+[SOURCE.json](../SOURCE.json) separates shipped checksums, candidate provenance
+and immutable historical 0.1.0 measured hashes. They do not qualify this binary.
 See [retained compatibility code](transport-core.md#retained-compatibility-code).

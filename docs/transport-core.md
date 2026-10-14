@@ -13,17 +13,19 @@ the abort object records a host request.
 
 A window cap of zero means unlimited. Never give a relayed peer a zero cap.
 With `legacy_oversize=1`, `sircl_core_window_claim` allows one claim larger than
-the cap when nothing is in flight. net-sircl uses this to let a chunk larger
-than the window make progress.
+the cap when nothing is in flight. This compatibility option is not the
+relayed admission policy. net-sircl
+atomically reserves separate forward and ACK credit and splits writes to fit.
 
-Version 0.1.0 exposes ABI 1. An incompatible public API or data-layout change
-requires a new ABI number. This is separate from the plugin's wire version 2,
+Version 0.1.1 exposes ABI 1. An incompatible public API or data-layout change
+requires a new ABI number. This is separate from the plugin's wire version 6,
 which must agree between hosts.
 
 ## Retained compatibility code
 
-All C sources and headers are frozen for 0.1.0 to preserve the measured bytes
-listed in SOURCE.json. Some comments refer to the originating project.
+SOURCE.json records the shipped source hashes and the candidate hashes
+separately from historical 0.1.0 measured bytes. The version macro and its
+test use 0.1.1; the ABI remains 1. Some comments refer to the originating project.
 The following code is research-only and is not part of the plugin's transport:
 
 - `transport-core/src/fabric.c` and `include/sircl_fabric.h`: collective planner

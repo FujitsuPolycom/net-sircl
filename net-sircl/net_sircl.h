@@ -12,9 +12,11 @@
  * - The sender's isend matches the entry, RDMA-writes the payload into the receiver's buffer, then a 4-byte
  *   size word and a 4-byte done word into the receiver's completion slot, all on one queue pair, so RC
  *   ordering makes the done word prove the payload landed.
- * - Toward a relayed peer the payload goes in signaled chunks while the bytes in flight through the local
- *   function stay under a window shared by every comm on that (function, peer) pair: a relay's hairpin queue
- *   (512 KiB on ConnectX-7, unable to pause its sender) holds one function's traffic toward one destination.
+ * - Relayed connections share a route-derived charged-byte allowance per outgoing function,
+ *   with separate ACK debt when both resources permit control-pair progress;
+ *   otherwise the base route or B/(N-2) aggregate policy remains. Shares round down.
+ *   Forward traffic plus reverse ACKs stays below 7/8 of an assumed 512 KiB queue at default B.
+ *   Direct peers keep unwindowed sends. See README "Relay window" for the capacity assumptions.
  *
  * Routes. A peer position's route lists the local functions of its lanes (up to two, lane order). The
  * connector keeps NCCL's device when it is one of them (NCCL spreads channels over its devices, which keeps
@@ -22,16 +24,20 @@
  * the same lane of its own route, so both ends are the same function class on the same path.
  *
  * Settings (environment, read at init):
- *   NET_SIRCL_TOPOLOGY      a topology file (below): routes and windows for every peer, this host's position
+ *   NET_SIRCL_TOPOLOGY      required topology file (below): routes for every peer, this host's position
  *                           from its host name
  *   NET_SIRCL_POSITION      this process's position (overrides the topology file's host-name match)
  *   NET_SIRCL_ROUTES        <position>=<function>[/<function>],... lanes per peer (SIRCL_PEER_ROUTES format);
- *                           overrides the topology file per peer
- *   NET_SIRCL_WINDOWS       <position>=<bytes>,... the in-flight cap per local function toward a peer;
- *                           overrides the topology file per peer
+ *                           must match the topology lanes
+ *   NET_SIRCL_WINDOWS       <position>=<bytes>,... optional direct-peer payload cap per function;
+ *                           relayed entries can only lower every function's source allowance
+ *   NET_SIRCL_RELAY_BUDGET  directional charged-byte budget, default 327680, range 65536..327680
+ *   NET_SIRCL_IB_TIMEOUT    RC ACK timeout exponent, default 20, decimal 1..31 (direct and relayed)
+ *   NET_SIRCL_IB_RETRY_CNT  RC retry count, default 7, decimal 0..7
  *   NET_SIRCL_HCA           comma list of RDMA functions to expose (default: every active RoCE function)
  *   NET_SIRCL_GID_INDEX     GID index (default: the function's RoCE v2 IPv4 GID, found in sysfs)
- *   NET_SIRCL_CHUNK         bytes per signaled chunk under a window (default 32768, SIRCL's forward chunk)
+ *   NET_SIRCL_CHUNK         maximum payload bytes per signaled windowed chunk (default 65536);
+ *                           shrinks to available credit and half the allowance when two 4 KiB pieces fit
  *   NET_SIRCL_OOB_ADDR      IPv4 address for the connection exchange (default: NCCL_SOCKET_IFNAME's first
  *                           IPv4 address, else 127.0.0.1)
  *   NET_SIRCL_CONNECT_TIMEOUT_MS  connect/accept deadline (default 60000)
@@ -47,7 +53,7 @@
  *   cable <i>.port<p> <j>.port<q>  one cable (repeatable; with `cabling explicit`, or added to ring/path)
  *   port0 <function> <function>    the functions of port 0, lane order (default rocep1s0f0 roceP2p1s0f0)
  *   port1 <function> <function>    the functions of port 1 (default rocep1s0f1 roceP2p1s0f1)
- *   relay_budget <bytes>           the window toward a relayed peer (default 393216, 75 % of 512 KiB)
+ *   relay_budget <bytes>           directional budget ceiling (default 393216), limited by the environment
  *
  * NVIDIA NCCL's plugin headers (nccl/, Apache-2.0) are vendored unchanged from tag v2.32.3-1,
  * plugins/net/example/nccl/; see NOTICE. */
@@ -58,7 +64,7 @@
 #include <stdint.h>
 
 #define NET_SIRCL_MAGIC 0x53495243u /* "SIRC" */
-#define NET_SIRCL_VERSION 2         /* wire version: the handle and metadata below */
+#define NET_SIRCL_VERSION 6         /* independent forward and reverse-ACK admission */
 #define NET_SIRCL_MAX_DEVS 16
 #define NET_SIRCL_MAX_LANES 2
 #define NET_SIRCL_SLOTS 32          /* NCCL_NET_MAX_REQUESTS */
@@ -86,6 +92,7 @@ struct net_sircl_meta {
   uint64_t ctrl_addr;
   int32_t position;
   int32_t lane;            /* the connector's lane; the acceptor answers with the same, -1 without a route */
+  uint64_t policy;         /* identical topology and directional relay budget on every host */
 };
 
 /* Each comm's control block, registered remote-writable. The sender's peer writes `cts` and `cts_seq`; the

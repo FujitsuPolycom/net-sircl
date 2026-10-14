@@ -93,7 +93,8 @@ static inline int sircl_core_qp_rts(struct ibv_qp *qp, unsigned timeout, unsigne
   memset(&a, 0, sizeof a);
   a.qp_state = IBV_QPS_RTS;
   a.timeout = (uint8_t)timeout;
-  a.retry_cnt = a.rnr_retry = (uint8_t)retry;
+  a.retry_cnt = (uint8_t)retry;
+  a.rnr_retry = 7; /* Receiver-not-ready retries are independent of the ACK retry budget. */
   a.max_rd_atomic = 1;
   return ibv_modify_qp(qp, &a, IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY |
                               IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC);

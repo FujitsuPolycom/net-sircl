@@ -8,21 +8,27 @@ net-sircl built against the shared-memory verbs stand-in (libnccl-net-sircl-emu.
 transport for comparison.
 
     nccl_e2e.py --launch --teardown release-graph|keep-graph [--net sircl|socket] [--windowed] --out DIR
+    nccl_e2e.py --launch --native /path/to/nccl_compat_e2e --plugin PLUGIN --windowed --out DIR
+
+The native backend uses distinct NCCL_HOSTID values to model two hosts on GPU 0 with older NCCL releases.
+It checks uint32 data and captures all three collectives. It needs no PyTorch installation.
 
 Each rank: bfloat16 all-reduce, all-gather and broadcast from 8 KiB to 64 MiB, eager, every element checked;
 one CUDA graph of a 64 KiB all-reduce replayed 20 times with new inputs, checked; then teardown:
   release-graph  the graph is deleted and the stream synchronized before destroy_process_group (the order
                  nccl-tests uses);
-  keep-graph     destroy_process_group while the captured graph still exists (an order some application scripts use). NCCL's destroy waits until every graph that holds the communicator is gone
+  keep-graph     destroy_process_group while the captured graph still exists.
+                 NCCL's destroy waits until every graph that holds the communicator is gone
                  (init.cc commDestroySync, "keep polling until all graphs referencing us die").
 Each rank prints "PASS" after destroy returns. --launch starts both ranks with the environment and reports
-per rank: exit status, whether PASS printed, and how long teardown took (a 60 s limit for teardown).
+per rank: exit status, whether PASS printed, and how long teardown took. --timeout bounds the whole run.
 """
 import argparse
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 SIZES = [8 << 10, 64 << 10, 512 << 10, 4 << 20, 32 << 20, 64 << 20]
@@ -93,18 +99,28 @@ def launch(args):
                 NCCL_DEBUG_SUBSYS="INIT,NET", NCCL_SOCKET_IFNAME="lo")
     if args.net == "sircl":
         base.update(NCCL_NET="sircl", NCCL_NET_PLUGIN=args.plugin, NET_SIRCL_OOB_ADDR="127.0.0.1",
-                    SIRCL_EMU_FABRIC=f"/net-sircl-e2e-{os.getpid()}", NET_SIRCL_STANDIN_DEVICES="2")
+                    SIRCL_EMU_FABRIC=f"/sircl-emu-glm-e2e-{os.getpid()}", NET_SIRCL_STANDIN_DEVICES="4")
     else:
         base.update(NCCL_NET="Socket", NCCL_NET_PLUGIN="none")
     procs = []
+    rendezvous = tempfile.TemporaryDirectory(prefix="net-sircl-nccl-")
+    topology = os.path.join(rendezvous.name, "topology")
+    with open(topology, "w") as f:
+        f.write(("hosts rank0 relay0 relay1 rank1\ncabling path\n" if args.windowed else
+                 "hosts rank0 rank1\ncabling path\n") + "port0 emu0 emu1\nport1 emu2 emu3\n")
     for rank in range(2):
-        env = dict(base, RANK=str(rank))
-        if args.windowed and args.net == "sircl":
-            peer = 1 - rank
-            env.update(NET_SIRCL_POSITION=str(rank), NET_SIRCL_ROUTES=f"{peer}=emu0/emu1",
-                       NET_SIRCL_WINDOWS=f"{peer}=131072", NET_SIRCL_CHUNK="32768")
+        env = dict(base, RANK=str(rank), NET_SIRCL_TOPOLOGY=topology,
+                   NET_SIRCL_HCA="emu0,emu1" if rank == 0 else "emu2,emu3",
+                   NET_SIRCL_POSITION=str(rank * 3 if args.windowed else rank))
+        if args.net == "sircl":
+            # NCCL's host-hash override models separate hosts on one GPU, including releases before
+            # NCCL_MULTI_RANK_GPU_ENABLE. P2P and SHM remain disabled; every transfer uses ext-net.
+            env["NCCL_HOSTID"] = f"net-sircl-emulated-host-{rank}"
+            env["NCCL_CUMEM_HOST_ENABLE"] = "0"
         log = open(os.path.join(args.out, f"rank{rank}.log"), "w")
-        procs.append((subprocess.Popen([sys.executable, __file__, "--rank", "--teardown", args.teardown], env=env,
+        command = ([args.native, str(rank), os.path.join(rendezvous.name, "id")] if args.native else
+                   [sys.executable, __file__, "--rank", "--teardown", args.teardown])
+        procs.append((subprocess.Popen(command, env=env,
                                        stdout=log, stderr=subprocess.STDOUT), log))
     deadline = time.monotonic() + args.timeout
     results = []
@@ -113,33 +129,40 @@ def launch(args):
             code = p.wait(timeout=max(1, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             p.kill()
+            p.wait()
             code = "timeout"
         log.close()
         text = open(os.path.join(args.out, f"rank{rank}.log")).read()
         teardown = next((line.split("teardown ")[1] for line in text.splitlines() if ": teardown " in line), None)
         results.append({"rank": rank, "exit": code, "pass": f"rank {rank}: PASS" in text,
                         "exact_lines": text.count(" exact"), "teardown": teardown,
-                        "plugin": "Using network sircl" in text, "wrong": "WRONG" in text})
+                        "plugin": "via NET/sircl/" in text and "via P2P" not in text, "wrong": "WRONG" in text})
     if args.net == "sircl":
         shm = "/dev/shm" + base["SIRCL_EMU_FABRIC"]
         if os.path.exists(shm):
             os.unlink(shm)
-    summary = {"net": args.net, "teardown": args.teardown, "windowed": args.windowed, "ranks": results}
+    rendezvous.cleanup()
+    summary = {"net": args.net, "teardown": args.teardown, "windowed": args.windowed,
+               "backend": "native" if args.native else "pytorch", "ranks": results}
     print(json.dumps(summary))
-    return 0 if all(r["pass"] and r["exit"] == 0 for r in results) else 1
+    return 0 if all(r["pass"] and r["exit"] == 0 and not r["wrong"] and
+                    (args.net != "sircl" or r["plugin"]) for r in results) else 1
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--launch", action="store_true", help='Launch two ranks sharing one CUDA GPU')
-    parser.add_argument("--rank", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--teardown", choices=("release-graph", "keep-graph"), default="release-graph", help='Whether to release captured graphs before communicator destruction')
-    parser.add_argument("--net", choices=("sircl", "socket"), default="sircl", help='NCCL transport to test')
-    parser.add_argument("--windowed", action="store_true", help='Use two lanes and a shared relay window')
-    parser.add_argument("--plugin", default="", help='Path to the emulated plugin shared library')
-    parser.add_argument("--timeout", type=float, default=240, help='Rank timeout in seconds')
-    parser.add_argument("--out", default="/tmp/nccl-e2e", help='Directory for rank logs and JSON summary')
+    parser.add_argument("--launch", action="store_true")
+    parser.add_argument("--rank", action="store_true")
+    parser.add_argument("--teardown", choices=("release-graph", "keep-graph"), default="release-graph")
+    parser.add_argument("--net", choices=("sircl", "socket"), default="sircl")
+    parser.add_argument("--windowed", action="store_true")
+    parser.add_argument("--plugin", default="")
+    parser.add_argument("--native", default="", help="path to the nccl_compat_e2e executable")
+    parser.add_argument("--timeout", type=float, default=240)
+    parser.add_argument("--out", default="/tmp/nccl-e2e")
     args = parser.parse_args()
+    if args.native and args.teardown != "release-graph":
+        parser.error("the native backend releases its graph before communicator teardown")
     if args.rank:
         return rank_main(args)
     return launch(args)

@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseTests(unittest.TestCase):
-    def test_measured_transport_source_bytes_are_retained(self):
+    def test_release_transport_source_bytes_match_manifest(self):
         manifest = json.loads((ROOT / "SOURCE.json").read_text())
-        for name, expected in manifest["measured_source_sha256"].items():
+        for name, expected in manifest["source_sha256"].items():
             with self.subTest(path=name):
                 self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), expected)
 
@@ -39,6 +39,9 @@ class ReleaseTests(unittest.TestCase):
                 for required in ("README.md", "LICENSE", "NOTICE", "Makefile", "SOURCE.json",
                                  "examples/pair.topology", ".github/workflows/ci.yml",
                                  "net-sircl/nccl/LICENSE.txt", "docs/transport-core.md",
+                                 "RELEASE_NOTES-0.1.1.md", "net-sircl/ROUTE-ALLOWANCE.md",
+                                 "net-sircl/PROFILING.md", "net-sircl/net_sircl_routes.h",
+                                 "net-sircl/net_sircl_profile.h", "net-sircl/net_sircl_compat.h",
                                  "fabric-tool/LICENSE", "fabric-tool/NOTICE", "fabric-tool/VERSION",
                                  "fabric-tool/mesh_marker.c", "fabric-tool/fabric_tool/cli.py",
                                  "fabric-tool/fabric-tool", "fabric-tool/tests/test_plan.py"):

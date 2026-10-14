@@ -13,7 +13,7 @@ extern "C" {
 #define SIRCL_CORE_API
 #endif
 #define SIRCL_CORE_ABI 1u
-#define SIRCL_CORE_VERSION "0.1.0"
+#define SIRCL_CORE_VERSION "0.1.1"
 #define SIRCL_CORE_MAX_POSITIONS 64
 #define SIRCL_CORE_MAX_LANES 2
 SIRCL_CORE_API unsigned sircl_core_abi(void);

@@ -1,7 +1,7 @@
 /* net-sircl layer tests: the plugin's entry points between two processes of one host, over libsircl's
  * shared-memory verbs stand-in (the plugin built with NET_SIRCL_STANDIN). No NCCL, no GPU, no RoCE device.
  *
- *   layer_test plain|windowed|lanes|teardown|peerloss|timeout|routeless
+ *   layer_test plain|windowed|lanes|teardown|peerloss|timeout|directlanes
  *
  * The parent listens and receives; the child connects and sends. Each mode prints one line starting
  * "net-sircl layer test <mode>:" and exits 0 when its checks hold:
@@ -11,7 +11,7 @@
  *              interleaved, exact, and never more than 64 KiB in flight through the function
  *   lanes      routes on both sides (emu0/emu1): a connection keeps NCCL's device when it is a lane, takes
  *              the lanes in turn when it is not, and both ends of every connection use the same lane
- *   routeless  no routes: every connection uses the device NCCL passed
+ *   directlanes  no routes: every connection uses the device NCCL passed
  *   teardown   comms closed with receives and a send outstanding, after traffic: every close and finalize
  *              returns within 2 s
  *   peerloss   the sender's process ends after connecting: the receiver's waiting request fails with
@@ -206,6 +206,7 @@ static void plain_send(void *comm) {
   for (int k = 0; k < PIPE_N; ++k) wait_done(reqs[k], NULL);
   uint64_t max_inflight = 0, chunks = 0;
   net_sircl_stats(comm, &max_inflight, &chunks);
+  if (max_inflight) die("a direct peer was windowed");
   printf("net-sircl layer test plain: %zu sizes and %d pipelined messages exact; %llu payload writes\n", NSIZES,
          PIPE_N, (unsigned long long)chunks);
   NET.deregMr(comm, mr);
@@ -298,13 +299,13 @@ static const char *const LANE_DEV[3] = {"emu1", "emu0", "emu0"};
 static const int LANE_IDX[3] = {1, 0, 0};
 
 static int receiver(int to_child, int from_child) {
-  int listens = !strcmp(mode, "windowed") ? 2 : !strcmp(mode, "lanes") || !strcmp(mode, "routeless") ? 3 : 1;
-  if (!strcmp(mode, "windowed") || !strcmp(mode, "lanes")) setenv("NET_SIRCL_POSITION", "3", 1);
+  int listens = !strcmp(mode, "windowed") ? 2 : !strcmp(mode, "lanes") || !strcmp(mode, "directlanes") ? 3 : 1;
+  setenv("NET_SIRCL_POSITION", (!strcmp(mode, "windowed") || !strcmp(mode, "lanes")) ? "3" : "0", 1);
   if (!strcmp(mode, "lanes")) {
     setenv("NET_SIRCL_STANDIN_DEVICES", "3", 1);
     setenv("NET_SIRCL_ROUTES", "5=emu0/emu1", 1);
   }
-  if (!strcmp(mode, "routeless")) setenv("NET_SIRCL_STANDIN_DEVICES", "3", 1);
+  if (!strcmp(mode, "directlanes")) setenv("NET_SIRCL_STANDIN_DEVICES", "3", 1);
   void *ctx = init();
   char handles[3][H];
   void *listen[3], *comms[3] = {NULL, NULL, NULL};
@@ -323,14 +324,14 @@ static int receiver(int to_child, int from_child) {
     plain_recv(comms[0]);
   } else if (!strcmp(mode, "windowed")) {
     windowed_recv(comms);
-  } else if (!strcmp(mode, "lanes") || !strcmp(mode, "routeless")) {
+  } else if (!strcmp(mode, "lanes") || !strcmp(mode, "directlanes")) {
     for (int i = 0; i < 3; ++i) {
       char name[64];
       int lane = net_sircl_comm_device(comms[i], name, sizeof name);
       if (!strcmp(mode, "lanes") && (strcmp(name, LANE_DEV[i]) || lane != LANE_IDX[i]))
         die("an accepted comm is not on the connector's lane");
-      if (!strcmp(mode, "routeless") && (strcmp(name, "emu0") || lane != -1))
-        die("an accepted comm without routes left the listening device");
+      if (!strcmp(mode, "directlanes") && (strcmp(name, LANE_DEV[i]) || lane != LANE_IDX[i]))
+        die("a direct peer did not preserve the topology lane");
       one_recv(comms[i], 40 + i);
     }
   } else if (!strcmp(mode, "teardown")) {
@@ -384,12 +385,13 @@ static int receiver(int to_child, int from_child) {
 }
 
 static int sender(int from_parent, int to_parent) {
-  int listens = !strcmp(mode, "windowed") ? 2 : !strcmp(mode, "lanes") || !strcmp(mode, "routeless") ? 3 : 1;
+  setenv("NET_SIRCL_POSITION", !strcmp(mode, "windowed") ? "5" : "1", 1);
+  int listens = !strcmp(mode, "windowed") ? 2 : !strcmp(mode, "lanes") || !strcmp(mode, "directlanes") ? 3 : 1;
   if (!strcmp(mode, "windowed")) {
     char w[32];
     snprintf(w, sizeof w, "3=%d", WIN);
     setenv("NET_SIRCL_WINDOWS", w, 1);
-    setenv("NET_SIRCL_ROUTES", "3=emu0", 1);
+    setenv("NET_SIRCL_ROUTES", "3=emu0/emu1", 1);
     setenv("NET_SIRCL_CHUNK", "16384", 1);
   }
   if (!strcmp(mode, "lanes")) {
@@ -397,7 +399,7 @@ static int sender(int from_parent, int to_parent) {
     setenv("NET_SIRCL_STANDIN_DEVICES", "3", 1);
     setenv("NET_SIRCL_ROUTES", "3=emu0/emu1", 1);
   }
-  if (!strcmp(mode, "routeless")) setenv("NET_SIRCL_STANDIN_DEVICES", "3", 1);
+  if (!strcmp(mode, "directlanes")) setenv("NET_SIRCL_STANDIN_DEVICES", "3", 1);
   if (!strcmp(mode, "timeout")) setenv("NET_SIRCL_CONNECT_TIMEOUT_MS", "1500", 1);
   void *ctx = init();
   char handles[3][H];
@@ -414,15 +416,15 @@ static int sender(int from_parent, int to_parent) {
     return 0;
   }
   void *comms[3] = {NULL, NULL, NULL};
-  if (!strcmp(mode, "lanes") || !strcmp(mode, "routeless")) {
+  if (!strcmp(mode, "lanes") || !strcmp(mode, "directlanes")) {
     /* NCCL's devices: emu1 (a lane), emu0 (a lane), emu2 (not a lane: the lanes in turn, so lane 0). */
     int devs[3] = {dev_named("emu1"), dev_named("emu0"), dev_named("emu2")};
     for (int i = 0; i < 3; ++i) comms[i] = connect_one(ctx, devs[i], handles[i]);
     for (int i = 0; i < 3; ++i) {
       char name[64];
       int lane = net_sircl_comm_device(comms[i], name, sizeof name);
-      const char *want = !strcmp(mode, "lanes") ? LANE_DEV[i] : (i == 0 ? "emu1" : i == 1 ? "emu0" : "emu2");
-      int want_lane = !strcmp(mode, "lanes") ? LANE_IDX[i] : -1;
+      const char *want = LANE_DEV[i];
+      int want_lane = LANE_IDX[i];
       if (strcmp(name, want) || lane != want_lane) die("a connection chose the wrong device or lane");
       one_send(comms[i], 40 + i);
     }
@@ -463,11 +465,11 @@ static int sender(int from_parent, int to_parent) {
 }
 
 int main(int argc, char **argv) {
-  static const char *const modes[] = {"plain", "windowed", "lanes", "routeless", "teardown", "peerloss", "timeout"};
+  static const char *const modes[] = {"plain", "windowed", "lanes", "directlanes", "teardown", "peerloss", "timeout"};
   int known = 0;
   for (size_t i = 0; argc == 2 && i < sizeof modes / sizeof modes[0]; ++i) known |= !strcmp(argv[1], modes[i]);
   if (!known) {
-    fprintf(stderr, "usage: %s plain|windowed|lanes|routeless|teardown|peerloss|timeout\n", argv[0]);
+    fprintf(stderr, "usage: %s plain|windowed|lanes|directlanes|teardown|peerloss|timeout\n", argv[0]);
     return 2;
   }
   mode = argv[1];

@@ -1,4 +1,9 @@
-# Plugin versus stock NCCL: hardware measurements
+# Historical 0.1.0 measurements
+
+These records describe the 0.1.0 transport. See the
+[0.1.1 release notes](../RELEASE_NOTES-0.1.1.md) for wire-6 candidate measurements
+and the pending final-pass record. Historical byte-equality claims below apply
+to 0.1.0, not to the 0.1.1 tree.
 
 These are research-only communication measurements on DGX Spark GB10, not
 serving qualification or throughput guarantees. The measured plugin builds

@@ -1,57 +1,95 @@
 # Configuration
 
-The same topology file belongs on every participating host. `#` starts a comment.
+
+A text file, the same on every host, `#` for comments:
+
+```text
+# Ring A: four Sparks cabled as a ring (host i's port 0 to host i+1's port 1)
+hosts node-0 node-1 node-2 node-3
+cabling ring
+```
 
 | Key | Meaning |
 |---|---|
-| `net-sircl-topology` | Optional first line; ignored by the parser |
-| `hosts <name> ...` | Host names in cable order; zero-based positions |
-| `cabling ring` | Port 0 to the next host's port 1, including the closing cable |
-| `cabling path` | Same ordering without a closing cable |
-| `cabling explicit` | Only the supplied `cable` lines |
-| `cable <i>.port<p> <j>.port<q>` | One cable; repeat as needed. With `cabling ring` or `path`, adds to the generated cables |
-| `port0 <fn> <fn>` | Two RDMA functions (primary, then secondary), carrying lanes 0 and 1; default `rocep1s0f0 roceP2p1s0f0` |
-| `port1 <fn> <fn>` | Two RDMA functions (primary, then secondary), carrying lanes 0 and 1; default `rocep1s0f1 roceP2p1s0f1` |
-| `relay_budget <bytes>` | Maximum bytes in flight toward a relayed peer per local function; default 393216, 75% of the 512 KiB NIC forwarding queue |
+| `hosts <name> ...` | host names in position order; a host finds its own position by its host name (`NET_SIRCL_POSITION` overrides) |
+| `cabling ring` / `path` / `explicit` | `ring`: host i's port 0 is cabled to host i+1's port 1, and the last host to the first; `path`: the same without the closing cable; `explicit`: only `cable` lines |
+| `cable <i>.port<p> <j>.port<q>` | one cable (repeatable) |
+| `port0 <fn> <fn>`, `port1 <fn> <fn>` | the RDMA functions of each port, lane order (default the DGX OS names above) |
+| `relay_budget <bytes>` | directional budget ceiling, 65536–393216 bytes; default ceiling 393216, further limited by `NET_SIRCL_RELAY_BUDGET` |
 
-The plugin derives shortest paths, lane functions, relay counts and windows.
-For equally short directions in an even ring, lane 0 takes one direction and
-lane 1 the other. NCCL may use a subset of the file's hosts, but all intermediate
-hosts on any selected path must provide the required relay state.
+A topology file is required, including for a direct pair. The plugin derives the shortest cabled path,
+the local functions of its two lanes, the relays on the way and the source allowance. Each physical port
+must have at most one cable; host names must be unique. Expose both functions required by each route. Where two directions are equally short (the opposite host of an
+even ring), lane 0 takes one direction and lane 1 the other, as verified by the standalone route and queue-model tests.
 
-## Environment
+The NCCL ranks may be a subset of the hosts: a path of three Sparks inside a ring of four lists all four hosts,
+and the fourth relays.
+
+### Environment
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `NET_SIRCL_TOPOLOGY` | unset | Topology file |
-| `NET_SIRCL_POSITION` | inferred from host name | Position in the topology |
-| `NET_SIRCL_ROUTES` | topology routes | `<peer>=<function>[/<function>],...` per-peer lane overrides |
-| `NET_SIRCL_WINDOWS` | topology relay budget | `<peer>=<bytes>,...` per-function/peer cap shared by this process's comms; zero means unbounded |
-| `NET_SIRCL_HCA` | all active RoCE functions | Comma-separated function allowlist |
-| `NET_SIRCL_GID_INDEX` | first nonzero RoCE v2 IPv4 GID | GID index override |
-| `NET_SIRCL_CHUNK` | 32768 | Signaled chunk bytes for windowed transfers; minimum 4096 |
-| `NET_SIRCL_OOB_ADDR` | IPv4 selected by `NCCL_SOCKET_IFNAME`, otherwise loopback | Local address advertised for connection exchange; must be peer-reachable |
-| `NET_SIRCL_CONNECT_TIMEOUT_MS` | 60000 | Connect/accept deadline |
-| `NET_SIRCL_RELAXED_ORDERING` | 1 | Enable relaxed-ordering memory registration |
-| `NET_SIRCL_ROUTE_CHECK` | 1 | Refuse peers without a route through the selected interface |
-| `NET_SIRCL_SPEED_MBPS` | 100000 | Per-function speed reported to NCCL |
+| `NET_SIRCL_TOPOLOGY` | required | topology shared by all hosts, including relay-only hosts |
+| `NET_SIRCL_POSITION` | from the topology file's host names | this process's position |
+| `NET_SIRCL_ROUTES` | unset | optional `<position>=<function>/<function>,...`; must exactly match topology lanes |
+| `NET_SIRCL_WINDOWS` | unset | `<position>=<bytes>,...`; direct peers: optional per-function payload cap; relayed peers: can only lower the shared source allowance; 0 is rejected for relayed peers |
+| `NET_SIRCL_HCA` | every active RoCE function | comma list of functions to expose |
+| `NET_SIRCL_GID_INDEX` | the function's RoCE v2 IPv4 GID | GID index |
+| `NET_SIRCL_RELAY_BUDGET` | 327680 | base budget B (split limits: 6B/5 forward, B/5 ACK) per direction/function; decimal 65536–327680, limited by topology `relay_budget` |
+| `NET_SIRCL_CHUNK` | 65536 | maximum payload bytes per independently completed chunk; adapts to available credit |
+| `NET_SIRCL_OOB_ADDR` | first IPv4 of `NCCL_SOCKET_IFNAME` | address for the connection exchange |
+| `NET_SIRCL_CONNECT_TIMEOUT_MS` | 60000 | connect/accept deadline |
+| `NET_SIRCL_IB_TIMEOUT` | 20 | RC ACK timeout exponent, decimal 1-31; one timeout is 4.096 microseconds times 2^value |
+| `NET_SIRCL_IB_RETRY_CNT` | 7 | RC transport retry count, decimal 0-7 (0 disables retries); RNR retries remain 7 |
+| `NET_SIRCL_RELAXED_ORDERING` | 1 | register memory with relaxed ordering |
+| `NET_SIRCL_ROUTE_CHECK` | 1 | refuse a peer the function's interface has no route to |
+| `NET_SIRCL_SPEED_MBPS` | 100000 | speed reported to NCCL's tuner, per function |
 | `NET_SIRCL_TC` | 0 | RoCE traffic class |
 
-`NET_SIRCL_ROUTES` and `NET_SIRCL_WINDOWS` override individual topology peers.
-There is no need to set them in the pair quickstart. Without topology or explicit
-routes, NCCL's chosen device is used and the plugin cannot infer relay windows.
+`NET_SIRCL_ROUTES` may confirm topology lanes, but cannot change them. Unknown peers fail connection
+admission. Invalid window maps fail initialization; a relayed peer's override cannot remove or raise the
+directional cap. A smaller override lowers every function's source allowance on that host.
+Direct peers have window 0 unless explicitly capped. The directional budget accepts decimal digits only;
+empty, signed, malformed, overflowing and out-of-range values fail initialization.
 
-Set `NCCL_NET_PLUGIN` to the installed shared library and `NCCL_NET=sircl` to
-require it. Use `NCCL_ALGO=Ring` on rings and paths. For diagnostics, use
-`NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET`.
+The IB timeout and retry count are read at the first initialization and shared by live communicators.
+Unset values use the defaults; empty, malformed, overflowing or out-of-range values fail initialization.
+Signs and whitespace are not accepted. `NCCL_IB_TIMEOUT` and `NCCL_IB_RETRY_CNT` do not override these
+plugin settings. Timeout 0 (infinite in verbs) is deliberately excluded to retain finite ACK timeouts.
+Defaults match [NVIDIA NCCL v2.32.3-1](https://github.com/NVIDIA/nccl/blob/v2.32.3-1/src/transport/net_ib/connect.cc).
+Exponent 20 allows about 4.3 seconds per ACK timeout, compared with about 67 milliseconds at 14.
+The longer retry budget tolerates longer ACK stalls but delays failure or recovery of dropped tail packets.
+It is a mitigation, not evidence that a fabric or receiver stall has been resolved.
 
-Use one interface name or name prefix in `NCCL_SOCKET_IFNAME`. Its first IPv4
-address becomes the plugin's OOB address. NCCL's list/exclusion/exact-match
-syntax is not parsed here; configure `NET_SIRCL_OOB_ADDR` explicitly if using it.
-Loopback is useful for single-host tests and is unsuitable between Sparks.
+## Relay allowances and profiling
 
-`NET_SIRCL_STANDIN_DEVICES` and `SIRCL_EMU_FABRIC` are test-provider controls,
-not production configuration. `net-sircl/tests/emulation/nccl_e2e.py` sets them itself.
+See [the route allowance proof](../net-sircl/ROUTE-ALLOWANCE.md) for the
+source/function allocation, separate forward and ACK ledgers, fallback model,
+queue assumptions and oldest-first credit scheduling. The topology must list
+all forwarding hosts, including hosts outside the active communicator.
+
+`NET_SIRCL_PROFILE=/existing/writable/directory/job-prefix` enables cumulative
+JSON profiling. Unset or empty disables it. See [profiling](../net-sircl/PROFILING.md)
+for the schema, overhead and `net-sircl/tools/summarize_profile.py`.
+
+## Channel recommendation
+
+Set `NCCL_MAX_NCHANNELS=8` on every rank before NCCL initialization for relayed
+paths, with channel minima unset. This is an application setting; the plugin
+only emits a startup advisory when relayed peers are configured and none of
+`NCCL_MAX_NCHANNELS`, `NCCL_MAX_NRINGS` or `NCCL_MAX_CTAS` is present. It cannot
+observe application maxCTAs or tuner decisions. An explicit environment entry,
+even an invalid value, is left for NCCL to interpret. Direct-only routes produce
+no advisory. [Release measurements](../RELEASE_NOTES-0.1.1.md) cover the four-host
+path and describe the unmeasured cap-8 cases.
+
+Set `NCCL_NET_PLUGIN` to the installed library and `NCCL_NET=sircl` to require it.
+Use `NCCL_ALGO=Ring` on rings and paths and `NCCL_DEBUG=INFO
+NCCL_DEBUG_SUBSYS=INIT,NET` for diagnostics.
+
+Use one interface name or prefix in `NCCL_SOCKET_IFNAME`. The plugin does not
+parse NCCL's list/exclusion/exact-match syntax; configure `NET_SIRCL_OOB_ADDR`
+explicitly if using that syntax. Loopback is only suitable for local tests.
 
 ## PyTorch and CUDA graphs
 

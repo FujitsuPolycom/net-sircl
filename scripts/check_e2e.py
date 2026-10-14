@@ -49,8 +49,8 @@ def main():
             raise RuntimeError("a rank did not load the sircl network or reported a wrong collective result; see test-results/<mode>/rank*.log")
         for rank in range(2):
             log = (output / f"rank{rank}.log").read_text()
-            if "net-sircl 0.1.0 (wire version 2)" not in log or "transport-core 0.1.0 ABI 1 source " not in log:
-                raise RuntimeError("rank log lacks net-sircl 0.1.0 (wire version 2) or the transport-core identity line; rebuild with make emu")
+            if "net-sircl 0.1.1 (wire version 6)" not in log or "transport-core 0.1.1 ABI 1 source " not in log:
+                raise RuntimeError("rank log lacks net-sircl 0.1.1 (wire version 6) or the transport-core identity line; rebuild with make emu")
     return 0
 
 

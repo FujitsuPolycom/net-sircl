@@ -23,6 +23,9 @@ install:
 	$(MAKE) -C fabric-tool install PREFIX=$(PREFIX) DESTDIR=$(DESTDIR)
 	install -m 0644 README.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/README.md
 	install -m 0644 NOTICE $(DESTDIR)$(PREFIX)/share/doc/net-sircl/NOTICE
+	install -m 0644 RELEASE_NOTES-0.1.1.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/RELEASE_NOTES-0.1.1.md
+	install -d $(DESTDIR)$(PREFIX)/share/doc/net-sircl/net-sircl
+	install -m 0644 net-sircl/ROUTE-ALLOWANCE.md net-sircl/PROFILING.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/net-sircl/
 	install -m 0644 SOURCE.json $(DESTDIR)$(PREFIX)/share/doc/net-sircl/SOURCE.json
 	install -d $(DESTDIR)$(PREFIX)/share/doc/net-sircl/docs $(DESTDIR)$(PREFIX)/share/net-sircl/examples
 	install -m 0644 docs/*.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/docs/

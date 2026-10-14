@@ -7,7 +7,7 @@ It supplies RDMA connections through NCCL's network-plugin (`ext-net`) interface
 NCCL keeps its collective algorithms and CUDA-graph support. PyTorch and other
 NCCL users can load the plugin without a framework patch.
 
-Version **0.1.0**, connection protocol (wire version) **2**: every host in a job
+Version **0.1.1**, connection protocol (wire version) **6**: every host in a job
 must use a plugin with the same wire version.
 
 ## Requirements
@@ -17,7 +17,8 @@ must use a plugin with the same wire version.
   path of four. This release is research-only.
 - Linux with working NVIDIA drivers and RoCE v2 networking. No minimum DGX OS
   version is established by this repository's evidence.
-- NCCL **2.32.3**, the tested runtime, with the v12 network-plugin API.
+- NCCL **2.32.3**, the tested runtime, with the v12 network-plugin API. The library also exports APIs v7â€“v11;
+  CPU ABI checks do not qualify every NCCL runtime on hardware.
 - A C11 compiler, Make, Python 3.10 or later, and rdma-core development headers.
   CPU tests also need pytest. CUDA-enabled PyTorch runs the example below.
 - IPv4 addresses on the cabled RDMA interfaces and a reachable IP network for
@@ -34,8 +35,9 @@ must use a plugin with the same wire version.
 - **Relay:** an intermediate Spark that forwards traffic between its NIC
   ports so hosts without a shared cable can communicate.
 - **Relay window:** a cap on bytes in flight toward a peer reached through
-  relays. The NIC forwarding queue holds 512 KiB and cannot slow its sender;
-  the default window is 393216 bytes per local function and peer.
+  relays. Static route-derived source/function shares and separate ACK debt
+  bound modeled occupancy to at most 458752 bytes per independent 512 KiB
+  forwarding queue. See the [proof and assumptions](net-sircl/ROUTE-ALLOWANCE.md).
 
 | Cabling and communication | What to configure |
 |---|---|
@@ -94,8 +96,8 @@ the first matching interface to its peers. It does not parse NCCL's `^`
 `NET_SIRCL_OOB_ADDR` to this host's reachable IPv4 address instead.
 
 Expect `Loaded net plugin sircl (v12)`, `Using network sircl` and
-`net-sircl 0.1.0 (wire version 2)`. Every rank prints `PASS`. A further line,
-`net-sircl transport-core 0.1.0 ABI 1 source <sha256>`, identifies the bundled
+`net-sircl 0.1.1 (wire version 6)`. Every rank prints `PASS`. A further line,
+`net-sircl transport-core 0.1.1 ABI 1 source <sha256>`, identifies the bundled
 RDMA library's source files; see [source identity](docs/testing.md#source-identity).
 
 ## Rings and paths
@@ -141,22 +143,21 @@ remains unqualified. See the [release notes](docs/release-0.1.0.md).
 | Millisecond delays on a path | Check for `Using network sircl`; stock NCCL's IB transport moved relayed traffic at about 0.5 MB/s in testing |
 | Teardown hangs after graph capture | Release every captured graph before `destroy_process_group()`; see [configuration](docs/configuration.md#pytorch-and-cuda-graphs) |
 
-## Plugin versus stock NCCL
+## Measured relayed-path behavior
 
-Research-only results on DGX Spark GB10: NCCL 2.32.3, nccl-tests v2.21.1,
-bfloat16, one rank/GPU per host, both cable functions, relaxed ordering on.
-Values are 256 MiB out-of-place all-reduce bus bandwidth.
+On a four-host DGX Spark path, NCCL 2.32.3 Ring with eight channels reaches
+14.41/14.65 GB/s out-of-place/in-place all-reduce bus bandwidth at 256 MiB
+(four samples combined across rounds 9–10). The 8–256 MiB sweep returns exact
+results with zero mandatory drop/error deltas. Graph L05 completes in 44.80 s.
+These measurements use candidate source ee91dcc6, not the standalone release
+binary. [Release notes](RELEASE_NOTES-0.1.1.md) give conditions, sample counts,
+controls, other collectives and the pending final-pass section.
 
-| Layout and condition | net-sircl | Stock NCCL (own IB transport) |
-|---|---|---|
-| Pair, eager, 64 channels | 21.51 GB/s | 20.62 GB/s, same session |
-| Ring of eight, Ring, 4 channels, eager | 23.95 GB/s | 23.77 GB/s with cuMem enabled; separate session and NCCL build |
-| Path of four, Ring, 4 channels, two relays between end hosts | 17.67 GB/s eager; 17.73 GB/s CUDA graph | All-reduce and all-gather did not finish within 75 s; separate session and NCCL build |
-
-Every tested plugin collective returned exact results. The measured builds
-used the same transport C/header bytes as this release, with a different
-version string. The 0.1.0 library itself has not run on Sparks.
-See [conditions, limitations and reproduction](docs/measurements.md).
+For relayed jobs, set `NCCL_MAX_NCHANNELS=8` on every rank before NCCL
+initializes, leaving channel minima unset. The plugin emits an advisory when
+no supported cap environment entry exists; it does not apply the cap itself.
+Cap 8 on direct pairs and eight-rank jobs is not measured by these records.
+Historical plugin-versus-stock results remain in [measurements](docs/measurements.md).
 
 ## Limitations
 
@@ -164,10 +165,11 @@ The plugin stages data through host memory. GPU Direct RDMA, DMA-BUF and
 grouped receives are unsupported. Other GPU/NIC models, switches, multiple GPUs
 per host, and Tree/PAT connections on paths are not qualified; use Ring.
 
-Several processes or hosts sending through one relay at once are unsupported.
-The window limits one process's traffic through one local function toward one
-peer, not several senders' combined traffic. All-to-all traffic can overrun
-the forwarding queue. Small-message performance is not characterised.
+The route model includes every source in the complete topology, with one
+plugin process per physical host and consistent policy across overlapping
+jobs. Independent queues, reciprocal forwarding and no unrelated producers
+are required; physical queue independence and arbitrary multi-job traffic are
+not qualified. Small-message performance is not characterised.
 
 Known issue: on one cabled pair, one run in four of the all-gather line under
 CUDA-graph capture (`-G 20`, 8-256 MiB) stopped at its first size with
@@ -176,7 +178,7 @@ port counted six ACK timeouts. No relay was involved, and three further runs
 of that line passed. Whether the cause is the cable, the port or the plugin is
 not yet established.
 
-See [testing and CI](docs/testing.md), [release notes](docs/release-0.1.0.md)
+See [testing and CI](docs/testing.md), [release notes](RELEASE_NOTES-0.1.1.md)
 and [source provenance](SOURCE.json). `make help` lists build and test targets.
 
 Apache-2.0: [LICENSE](LICENSE) and [NOTICE](NOTICE) retain attribution to

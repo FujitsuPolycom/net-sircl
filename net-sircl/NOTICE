@@ -16,6 +16,24 @@ read for behavior, without adaptation: src/transport/net_ib/connect.cc,
 p2p.cc, init.cc, reg.cc and gdr.cc; src/transport/net.cc; src/graph/topo.cc;
 src/init.cc.
 
+The ACK timeout exponent 20 and transport retry count 7 follow the parameters
+IbTimeout and IbRetryCnt in NVIDIA NCCL v2.32.3-1 src/transport/net_ib/connect.cc;
+src/include/param.h establishes their NCCL_IB_TIMEOUT and NCCL_IB_RETRY_CNT names.
+The plugin's NET_SIRCL_IB_* parsing and diagnostics are independently written.
+Source: https://github.com/NVIDIA/nccl/tree/v2.32.3-1/src/transport/net_ib
+
+The relayed-channel recommendation follows NVIDIA NCCL v2.32.3-1
+src/graph/connect.cc, src/misc/param.cc, src/plugin/tuner.cc and
+src/include/plugin/tuner/tuner_v6.h. These were read to establish supported
+channel controls, parameter caching and tuner scope. The advisory is
+independently written; no upstream implementation was copied.
+
+The ext-net compatibility adapters use the unchanged headers above. NVIDIA NCCL's loaders and
+ext-net headers at tags v2.19.1-1 through v2.32.3-1 were read to establish API selection and fallback.
+The v2.23.4-1, v2.27.7-1, v2.28.9-1 and v2.32.3-1 build files, src/misc/utils.cc host-hash override,
+src/graph/topo.cc physical-NIC fallback, and plugin adapter sources were read for the compatibility
+tests. No NVIDIA implementation was copied or adapted into net_sircl_compat.h or the tests.
+
 RoCEnante attribution
 ---------------------
 Includes transport design derived from RoCEnante, the b12x RoCE collectives

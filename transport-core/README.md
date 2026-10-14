@@ -3,7 +3,7 @@
 The C11 library provides device and GID discovery, reliable-connected (RC)
 queue-pair setup, host-memory registration, posting and completion primitives,
 window arithmetic, topology parsing and a shared-memory RDMA emulator.
-Version 0.1.0, ABI 1. It contains no CUDA kernels or NCCL collective algorithms.
+Version 0.1.1, ABI 1. It contains no CUDA kernels or NCCL collective algorithms.
 
 From this directory, `make` builds the library and `make check` runs CPU tests.
 Builds require a C compiler, pthreads, Python 3 and rdma-core headers. Tests use
