@@ -43,7 +43,11 @@ def main():
             else:
                 assert "net-sircl tuner:" not in log
             spans = re.findall(r"channel\{Lo\.\.Hi\}=\{(\d+)\.\.(\d+)\}", log)
-            assert spans, "NCCL 2.32.3 TUNING operation logs required"
+            # NCCL emits operation channel ranges only on rank zero.
+            if not spans and rank != 0:
+                counts.append(None)
+                continue
+            assert spans, "NCCL 2.32.3 rank-zero TUNING operation logs required"
             active = [int(hi) - int(lo) + 1 for lo, hi in spans]
             assert min(active) > 0
             limit = policy or int(overrides.get("NCCL_MAX_NCHANNELS", "64"))
