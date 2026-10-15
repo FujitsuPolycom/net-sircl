@@ -26,8 +26,10 @@ GPU emulation uses two processes on one RTX 5090, NCCL's distinct-host override,
 P2P/SHM disabled and shared-memory verbs. It verifies every element of eager
 all-reduce/all-gather/broadcast at six sizes through 64 MiB, graph replay and
 communicator destruction. It does not test ConnectX-7, firmware, actual relays,
-multihost performance, or a vLLM/SGLang server. Only NCCL 2.32.3 has retained
-0.1.1 Spark hardware measurements; 0.1.2 still needs hardware qualification.
+multihost performance, or a vLLM/SGLang server. NCCL 2.32.3 is the version
+used for the 0.1.2 DGX Spark hardware qualification; framework runs listed in
+the README's [Verified with](../README.md#verified-with) loaded 2.30.7, 2.31.2
+or 2.32.3 with the 0.1.1 library.
 
 ## PyTorch and image versions
 

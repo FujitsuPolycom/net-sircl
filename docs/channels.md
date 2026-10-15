@@ -53,6 +53,13 @@ Source reviewed: NVIDIA NCCL tag **v2.32.3-1**, Apache-2.0/BSD-3 attribution in
   plugin is not a documented initialization contract and would affect unrelated
   communicators, so the plugin never writes NCCL's environment.
 
-This is an emulation-tested default, not a new hardware performance result.
-The 0.1.1 direct-pair cap-16 cost is why a two-host topology keeps stock tuning.
-Compare automatic, explicit cap-8 and stock arms before hardware qualification.
+This default is hardware-qualified on a DGX Spark path of four and ring of
+eight with NCCL 2.32.3: every rank logged the eight-channel limit and no
+collective used more than eight active channels. Bandwidth at 8–256 MiB matched
+an explicit cap of 8 within single-job variation. Small path messages
+(8 KiB–2 MiB) were 0.6–0.97 of the explicit cap, and job startup about 1.5 s
+longer, because INIT still allocates 64 channels; set `NCCL_MAX_NCHANNELS=8`
+when that matters. The 0.1.1 direct-pair cap-16 cost is why a two-host
+topology keeps stock tuning; on hardware the pair's stock policy used 64
+channels and an explicit cap of 8 was faster at 8–16 MiB and 128–256 MiB.
+Conditions and tables are in the [0.1.2 release notes](../RELEASE_NOTES-0.1.2.md#hardware-qualification).
