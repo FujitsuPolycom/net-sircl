@@ -58,6 +58,14 @@ at six sizes from 8 KiB to 64 MiB, plus 20 CUDA-graph replays at 64 KiB.
 Graphs are released before process-group destruction. Each rank must select
 sircl, report seven exact-result lines and exit successfully.
 
+The launcher restricts CPU-staged emulation to LL and Simple. LL128 relies on
+128-byte data/flag visibility that ordinary CPU copies do not guarantee; it
+is not qualified by a passing run. A request that enables LL128 is rejected
+before ranks start. `--allow-ll128` is an explicit diagnostic opt-in for the
+launcher, including its Socket control; it may produce incorrect results.
+This policy affects emulation subprocesses only. The production RDMA plugin's
+tuner and the process-wide environment are unchanged.
+
 Logs and JSON summaries go under `test-results/`, which Git ignores and
 `make package` excludes. Logs contain this machine's host name; check them
 before sharing. The emulator moves bytes in shared memory and models no NIC,

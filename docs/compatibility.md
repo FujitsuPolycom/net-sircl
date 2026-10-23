@@ -41,14 +41,20 @@ not qualify every binary carrying that version. The
 source, compiled libraries, PyTorch versions and loaded NCCL library. Complete
 framework workloads and community vLLM images remain unqualified.
 
-Status: **unsupported** for four ranks sharing one GB10 GPU with PyTorch
-2.11.0+cu130, NCCL 2.32.3 and forced LL128. Exact checks fail with both the
-shared-memory verbs plugin and NCCL Socket under those conditions. LL and
-Simple pass the corresponding protocol probes; selecting Simple also passes
-the seven-case channel matrix. These observations do not establish a failure
-of the physical RDMA transport. The cached NGC PyTorch 26.09 image with
-PyTorch 2.14.0a0 and loaded NCCL 2.32.3 passes the channel matrix without a
-protocol override. Do not generalize either result to untested combinations.
+Status: **implemented** for safe protocol selection in CPU-staged emulation:
+the launcher defaults to LL and Simple and rejects an LL128-enabling request
+unless `--allow-ll128` explicitly permits a diagnostic run. The production
+RDMA plugin's protocol costs are unchanged.
+
+Raw LL128 on the CPU-staged path is **unsupported**. Four ranks sharing one
+GB10 with NCCL 2.32.3 fail forced-LL128 exact checks under PyTorch 2.11.0+cu130
+and NGC PyTorch 26.09's 2.14.0a0, including Socket controls. An independent
+native NCCL probe also fails through sircl emulation. This rules out PyTorch
+as a necessary cause. NVIDIA's [protocol explanation](https://github.com/NVIDIA/nccl/issues/281)
+requires ordered 128-byte data/flag visibility and cautions against forcing
+LL128 when the buffer or interconnect lacks it. The emulator's CPU `memmove`
+does not provide that guarantee. Safe selection is a mitigation, not an
+implementation of LL128 or proof of an upstream runtime defect.
 
 `scripts/check_e2e.py --expected-version 23102` queries `ncclGetVersion` after
 importing PyTorch and fails if the loaded version differs. It then verifies the
