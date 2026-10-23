@@ -2,6 +2,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
+import subprocess
 
 path = Path(__file__).resolve().parents[1] / 'net-sircl/tests/emulation/nccl_e2e.py'
 spec = importlib.util.spec_from_file_location('nccl_emulation', path)
@@ -26,3 +28,23 @@ class EmulationProtocols(unittest.TestCase):
 
     def test_diagnostic_opt_in_preserves_protocol_request(self):
         self.assertEqual(emulation.select_protocols('LL128', allow_ll128=True), 'LL128')
+
+    def test_channel_checker_reports_launcher_rejection(self):
+        path = Path(__file__).resolve().parents[1] / 'scripts/check_channels.py'
+        spec = importlib.util.spec_from_file_location('channel_check', path)
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        result = subprocess.CompletedProcess([], 2, stdout='', stderr='LL128 is unsafe for CPU-staged emulation')
+        with mock.patch('sys.argv', ['check_channels.py']), mock.patch.object(checker.subprocess, 'run', return_value=result):
+            with self.assertRaisesRegex(AssertionError, 'LL128 is unsafe'):
+                checker.main()
+
+    def test_teardown_checker_reports_launcher_rejection(self):
+        path = Path(__file__).resolve().parents[1] / 'scripts/check_teardown.py'
+        spec = importlib.util.spec_from_file_location('teardown_check', path)
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        result = subprocess.CompletedProcess([], 2, stdout='', stderr='LL128 is unsafe for CPU-staged emulation')
+        with mock.patch('sys.argv', ['check_teardown.py']), mock.patch.object(checker.subprocess, 'run', return_value=result):
+            with self.assertRaisesRegex(RuntimeError, 'LL128 is unsafe'):
+                checker.main()

@@ -34,8 +34,8 @@ def main():
                    "--launch", "--world-size", str(world), "--layout", layout,
                    "--plugin", str(ROOT / "net-sircl/libnccl-net-sircl-emu.so"), "--out", str(out)]
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=260)
-        summary = json.loads(result.stdout.strip().splitlines()[-1])
         assert result.returncode == 0, result.stdout + result.stderr
+        summary = json.loads(result.stdout.strip().splitlines()[-1])
         assert all(r["exact_lines"] == 7 and r["plugin"] for r in summary["ranks"]), summary
         counts = []
         for rank in range(world):
