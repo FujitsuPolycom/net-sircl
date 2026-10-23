@@ -23,16 +23,13 @@
 #include <unistd.h>
 
 #include <sircl_core/shm_verbs.h>
+#include "emulation_limits.h"
 
 #define SV_MAGIC 0x31465653u /* "SVF1" in byte order */
-#define SV_VERSION 1u
+#define SV_VERSION 2u
 #define SV_MAX_DEVICES 256
-#define SV_MAX_MRS 1024
-#define SV_MAX_QPS 2048
 #define SV_NAME 64
 #define SV_INLINE 16
-#define SV_LOCAL_QPS 1024
-#define SV_LOCAL_CQS 256
 
 /* -- shared registry --------------------------------------------------------------------------- */
 

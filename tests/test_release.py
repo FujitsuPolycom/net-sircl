@@ -69,7 +69,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(ctypes.c_char_p(ctypes.addressof(
             ctypes.c_char.in_dll(library, "net_sircl_release"))).value.decode(), version)
         identity = subprocess.check_output([sys.executable, str(ROOT / "transport-core/tools/identity.py")]).strip()
-        self.assertIn(identity, (ROOT / "net-sircl/libnccl-net-sircl-emu.so").read_bytes())
+        self.assertTrue(identity in (ROOT / "net-sircl/libnccl-net-sircl-emu.so").read_bytes(),
+                        "compiled emulator lacks the expected transport source identity; rebuild it from this source tree")
 
     def test_all_example_routes_parse(self):
         subprocess.run(["make", "-C", str(ROOT / "net-sircl"), "emu"], check=True)

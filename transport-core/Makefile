@@ -19,7 +19,7 @@ $(BUILD)/test_core: tests/test_core.c $(BUILD)/libsircl-core.a
 $(BUILD)/test_verbs: tests/test_verbs.c src/shm_verbs.c src/shm_memory.c | $(BUILD)
 	$(CC) $(CPPFLAGS) -Itests/fake_verbs $(CFLAGS) $(filter %.c,$^) -o $@
 $(BUILD)/test_emulator_lifetime: tests/test_emulator_lifetime.c src/shm_verbs.c src/shm_memory.c | $(BUILD)
-	$(CC) $(CPPFLAGS) -Itests/fake_verbs $(CFLAGS) -DSIRCL_EMU_TEST_HOOKS $(filter %.c,$^) -o $@
+	$(CC) $(CPPFLAGS) -Itests/fake_verbs $(CFLAGS) -DSIRCL_EMU_TEST_HOOKS -DSV_SEGMENTS=64 $(filter %.c,$^) -o $@
 check: all $(BUILD)/test_core $(BUILD)/test_verbs $(BUILD)/test_emulator_lifetime
 	$(BUILD)/test_core
 	$(BUILD)/test_verbs

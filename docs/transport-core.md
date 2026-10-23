@@ -63,3 +63,13 @@ lifecycle lock, so joining it cannot wait for a lock held by the joining thread.
 
 The emulator remains research-only test infrastructure. Its retirement and
 mapping checks establish local software contracts, not NIC or relay behavior.
+
+Its registry envelope supports eight local ranks with up to 1,024 local
+connections per rank: 8,192 shared QPs, 32,768 shared registrations, 1,024 local
+CQs and 4,096 local segment mappings. NCCL can allocate a 64-channel connection
+pool even when its tuner selects eight channels for operations. The emulator's
+registry must accommodate that initialization pool. CPU tests retain a smaller
+mapping-cache bound to exercise eviction independently of the production bound.
+The shared-memory registry layout is version 2; emulator providers with different
+registry layouts must not attach to the same fabric segment. The hardware wire
+protocol remains version 6.

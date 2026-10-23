@@ -195,12 +195,30 @@ static void worker_lifetime(void) {
   cleanup(&e);
 }
 
+static void registration_envelope(void) {
+  struct endpoint e = endpoint(4);
+  char error[256];
+  void *memory = sccl_emu_segment_alloc(4096, error, sizeof error); assert(memory);
+  struct ibv_mr *regions[1536];
+  for (unsigned i = 0; i < 1536; ++i) {
+    regions[i] = sircl_core_reg_mr(e.pd, memory, 4096, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    assert(regions[i]);
+  }
+  for (unsigned i = 0; i < 1536; ++i) assert(!sircl_core_dereg_mr(regions[i]));
+  struct ibv_cq *queues[300];
+  for (unsigned i = 0; i < 300; ++i) { queues[i] = sircl_core_create_cq(e.ctx, 1); assert(queues[i]); }
+  for (unsigned i = 0; i < 300; ++i) assert(!sircl_core_destroy_cq(queues[i]));
+  sccl_emu_segment_free(memory);
+  cleanup(&e);
+}
+
 int main(void) {
   char fabric[80]; snprintf(fabric, sizeof fabric, "/sircl-lifetime-%d", (int)getpid());
   assert(!setenv("SIRCL_EMU_FABRIC", fabric, 1));
   mapping_lifetimes();
   worker_lifetime();
+  registration_envelope();
   assert(!shm_unlink(fabric));
-  puts("emulator: 530 remote lifetimes, serialized membership and work retirement exact");
+  puts("emulator: 530 remote lifetimes, serialized retirement, 1536 registrations and 300 CQs exact");
   return 0;
 }

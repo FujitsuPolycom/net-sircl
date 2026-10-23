@@ -3,8 +3,8 @@
 #define SIRCL_EMU_MEMORY_H
 #include <stddef.h>
 #include <stdint.h>
+#include "emulation_limits.h"
 #define SV_NAME 64
-#define SV_SEGMENTS 512
 typedef struct {
   char name[SV_NAME];
   uint8_t *base;

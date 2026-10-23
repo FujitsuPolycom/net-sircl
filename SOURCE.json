@@ -172,16 +172,17 @@
     "transport-core/include/sircl_core/verbs_dl.c": "917eb77893adad8a62c053146ca8954d567b8e037a987a20a8e8393ac1f5f4eb",
     "transport-core/include/sircl_fabric.h": "5960d6fe55fba8c8f32a00bf747aecfd3a4b018db8248ce5134f75bd95843ebb",
     "transport-core/src/core.c": "3d32d0d6d58a2874573a3ba1ea1efddb5a96cbfc45b2bfd89e451fbd952549ef",
+    "transport-core/src/emulation_limits.h": "e7bc515560b9c1b0610279dd3ed6c0be9d3a3f248246e245299cc78db6017693",
     "transport-core/src/fabric.c": "edc6a98d8a8e1524ea502fade00b07467b57f299911ea8642b74a479497465b9",
     "transport-core/src/shm_memory.c": "4fcd9767b2e999d363b78100e360a84d9054edf4b65d3177db96cd4e9e263d4c",
-    "transport-core/src/shm_memory.h": "a7d4857229d5b0f8522f8d545de5c89bbc8c75bfebb0022db9e9ba9fb4a04189",
-    "transport-core/src/shm_verbs.c": "88d7237b5059e751f2ef38c02a805b29505de5dd3afcfdbca496866f5cbdcb80",
+    "transport-core/src/shm_memory.h": "defe5e56c0162f2c2ce3d7484693b2771bf0afb953f8a9994ba8ebe5e4f1e01b",
+    "transport-core/src/shm_verbs.c": "2bc7a33b4e492c1ab0ee25de3527695420ce7ddde4bd4b9b5128874093a1686b",
     "transport-core/src/sysfs.c": "747062778a2cab1744d43e602c724b1887ad6ba66428d62ee892b351f7f5b7c2",
     "transport-core/src/topology.c": "a3f7c625832f95816d8cac09d625aada86b4fe29f30923acbc9c126af73a9d0a",
     "transport-core/src/verbs_dl.c": "ea38fd0ef71bc215f8d97c4f836179aa9190dc87a34125a4a24a96e23bbc4d84",
     "transport-core/tests/fake_verbs/infiniband/verbs.h": "8c2173547a2169bb455d103b7842463168e75d4350f4434d92ab5dabc353c64c",
     "transport-core/tests/test_core.c": "af1228e52b14a1da826573e8eb604ca27ffaf603d3aa7f464b00a4b729f0c2c0",
-    "transport-core/tests/test_emulator_lifetime.c": "93d92a046853f8bc60077053768e5cac005bab51961f2d1305050330cd4a02e4",
+    "transport-core/tests/test_emulator_lifetime.c": "9a6b273b84cee7da73ec12eb03759098e11103bb461af02b5af6dd03311c0506",
     "transport-core/tests/test_verbs.c": "ec84a8971e48c2fd098dc06d630733af2a5f21c6cd6e9eaa89dca67a9871c220"
   },
   "upstream_source_sha256": {
@@ -243,5 +244,6 @@
     "source_path": "src/include/plugin/tuner/tuner_v4.h",
     "sha256": "1164e13f7096c21c3c02fda1ddcb13d52a9d74e89a42cbf287ac74710861c9cd",
     "function_enum": "src/include/nccl_common.h ncclFunc_t (in nccl/tuner.h)"
-  }
+  },
+  "emulator_shared_memory_version": 2
 }
