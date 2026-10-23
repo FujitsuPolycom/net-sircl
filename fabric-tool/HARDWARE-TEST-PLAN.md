@@ -75,9 +75,17 @@ CPU tests predict no throughput value. Compare only matched runs.
 ## Boot persistence (about 15 minutes on one ring)
 
 Install the boot unit locally on all four hosts with identical complete facts.
+Keep interface addressing persistent through an independent network service;
+the fabric tool does not assign addresses. If that service runs after
+`network-online.target`, require and order it before `fabric-table.service`.
 Reboot one host; wait for addresses and the unit to become ready. Require
 `verify` to pass for every host and repeat a relayed traffic probe. Record the
 systemd journal and counters. Keep any other installer's restore disabled.
+Record local restoration separately from group verification. A carrier reset
+can remove adjacent hosts' routes and neighbours; boot-only units do not
+repair those running hosts. If group verification fails, preserve that result,
+reapply across the group under operator control, verify and repeat traffic.
+Successful traffic after that repair does not qualify automatic group recovery.
 
 ## Remove and restore (about 10 minutes per ring)
 

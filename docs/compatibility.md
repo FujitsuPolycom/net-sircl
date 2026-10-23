@@ -35,10 +35,20 @@ or 2.32.3 with the 0.1.1 library.
 
 PyTorch wheels and container images carry their own NCCL. A framework version,
 image name or exported plugin symbol does not establish the loaded runtime.
-The current tests use PyTorch 2.11.0+cu128, its bundled NCCL 2.28.9, and separately
-selected unpatched 2.31.2/2.32.3 libraries. They do not qualify all PyTorch wheels
-or community vLLM images. For an image carrying NCCL 2.31.2, the matching runtime
-is tested here, but its complete framework workload remains unqualified.
+The runtime matrix above describes the recorded plugin 0.1.2 checks; it does
+not qualify every binary carrying that version. The
+[DGX Spark validation record](dgx-spark-validation.md) identifies the tested
+source, compiled libraries, PyTorch versions and loaded NCCL library. Complete
+framework workloads and community vLLM images remain unqualified.
+
+Status: **unsupported** for four ranks sharing one GB10 GPU with PyTorch
+2.11.0+cu130, NCCL 2.32.3 and forced LL128. Exact checks fail with both the
+shared-memory verbs plugin and NCCL Socket under those conditions. LL and
+Simple pass the corresponding protocol probes; selecting Simple also passes
+the seven-case channel matrix. These observations do not establish a failure
+of the physical RDMA transport. The cached NGC PyTorch 26.09 image with
+PyTorch 2.14.0a0 and loaded NCCL 2.32.3 passes the channel matrix without a
+protocol override. Do not generalize either result to untested combinations.
 
 `scripts/check_e2e.py --expected-version 23102` queries `ncclGetVersion` after
 importing PyTorch and fails if the loaded version differs. It then verifies the

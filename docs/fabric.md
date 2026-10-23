@@ -31,8 +31,8 @@ The tool does not assign addresses or bring links up. Each of the four RDMA
 functions needs IPv4. Each cable's ends must share a subnet on the primary
 functions (`rocep1...`) and another on the secondary functions (`roceP2...`).
 All hosts must use the same function-to-network-interface mapping. By default
-a lane may cross three relays (`--max-relays`); the plugin hardware measurements
-cover at most two. Three relays have not been measured for this release.
+a lane may cross three relays (`--max-relays`). Source-specific measurements
+and limits are recorded in [qualification evidence](qualification.md).
 
 ## Plan, apply and verify
 
@@ -133,7 +133,18 @@ This writes topology and facts under `/etc/fabric-table/`, copies the tool to
 `/opt/net-sircl` install), enables `fabric-table.service` and applies the relays.
 At boot the oneshot unit runs `apply --boot`, restoring missing objects and
 markers without removing anything. It does not continuously supervise markers.
-Addresses must be ready at `network-online.target`.
+Addresses must be ready at `network-online.target`. If a separate service
+configures them later, order `fabric-table.service` after that service and
+require it through a systemd drop-in. Copying addresses into the facts file
+does not configure the interfaces. Missing addresses block restoration.
+
+Status: **unsupported** for automatic recovery of the entire group after a
+link reset. A reboot can remove routes and permanent neighbour entries on
+the still-running adjacent hosts. Their boot units do not run again. After
+the links and addresses are ready, apply the group table across all hosts
+with `--execute`, then require group verification before resuming traffic.
+The [DGX Spark validation record](dgx-spark-validation.md) separates successful
+local boot restoration from this group recovery requirement.
 
 After reboot run `fabric verify --facts facts.json` from the workstation and
 `systemctl status fabric-table.service` on the restarted host. To disable
