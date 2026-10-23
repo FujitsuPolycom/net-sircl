@@ -95,6 +95,23 @@ int sircl_core_topology_parse(const char *path, struct sircl_core_topology *t, c
       snprintf(err, len, "%s: a cable joins a host index outside 0-%d", path, t->nhosts - 1);
       return -1;
     }
+  unsigned occupied[MAX_POSITIONS] = {0};
+  for (int c = 0; c < t->ncables; ++c) {
+    int a = t->cable[c].a, b = t->cable[c].b;
+    unsigned pa = 1u << t->cable[c].pa, pb = 1u << t->cable[c].pb;
+    if ((occupied[a] & pa) || (occupied[b] & pb)) {
+      snprintf(err, len, "%s: topology connects a port more than once", path);
+      return -1;
+    }
+    occupied[a] |= pa;
+    occupied[b] |= pb;
+  }
+  for (int a = 0; a < t->nhosts; ++a)
+    for (int b = a + 1; b < t->nhosts; ++b)
+      if (!strcmp(t->host[a], t->host[b])) {
+        snprintf(err, len, "%s: hosts names one host twice", path);
+        return -1;
+      }
   return 0;
 }
 

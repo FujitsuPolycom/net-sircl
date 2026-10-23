@@ -52,7 +52,6 @@ __attribute__((visibility("default"))) const char net_sircl_core_source[] = SIRC
 #define MAX_NET_BYTES (1u << 30) /* NCCL's MAX_NET_SIZE: transfers fit 32-bit lengths */
 #define SEND_DEPTH 1024
 #define CQ_DEPTH 2048
-#define MAX_POSITIONS 64
 #define MAX_WINDOWS 128
 #define RELAY_QUEUE_BYTES 524288u
 /* Reserve 1/8 of each queue. Reverse ACKs cost at most 2/5 of the
@@ -60,7 +59,7 @@ __attribute__((visibility("default"))) const char net_sircl_core_source[] = SIRC
  * The split policy instead bounds forward charge by 6B/5 and ACK debt by B/5.
  * Either policy obeys 7B/5 <= 7/8 * capacity. */
 #define RELAY_BUDGET_DEFAULT (RELAY_QUEUE_BYTES * 5u / 8u)
-#include "net_sircl_routes.h"
+#include "net_sircl_plan.h"
 #define PEER_CHECK_EVERY 4096u   /* test()/isend() calls between peer-loss checks of a waiting comm */
 
 /* wr_id: kind in 56-63, ACK units (128 bytes) in 40-55, charge in 8-39,
@@ -241,254 +240,7 @@ static void shared_free(void *p) {
 #endif
 }
 
-/* -- settings -- */
-static long env_long(const char *name, long fallback) {
-  const char *v = getenv(name);
-  if (!v || !*v) return fallback;
-  char *end;
-  long x = strtol(v, &end, 10);
-  return *end ? fallback : x;
-}
-
-/* Reject malformed or overflowing QP fields before opening devices; never truncate to uint8_t. */
-static ncclResult_t env_range(const char *name, int fallback, int min, int max, int *out) {
-  const char *v = getenv(name);
-  *out = fallback;
-  if (!v) return ncclSuccess;
-  for (const char *p = v; *p; ++p)
-    if (*p < '0' || *p > '9') goto invalid;
-  errno = 0;
-  char *end;
-  long x = strtol(v, &end, 10);
-  if (!*v || errno == ERANGE || *end || x < min || x > max) goto invalid;
-  *out = (int)x;
-  return ncclSuccess;
-invalid:
-  WARN("net-sircl: %s must be a decimal integer in %d..%d (got '%s')", name, min, max, v);
-  return ncclInvalidArgument;
-}
-
-static uint32_t oob_address(void) {
-  const char *a = getenv("NET_SIRCL_OOB_ADDR");
-  struct in_addr in;
-  if (a && *a && inet_pton(AF_INET, a, &in) == 1) return in.s_addr;
-  const char *ifname = getenv("NCCL_SOCKET_IFNAME");
-  if (ifname && *ifname && *ifname != '^' && *ifname != '=') {
-    struct ifaddrs *list, *i;
-    if (getifaddrs(&list) == 0) {
-      uint32_t found = 0;
-      for (i = list; i && !found; i = i->ifa_next)
-        if (i->ifa_addr && i->ifa_addr->sa_family == AF_INET && !strncmp(i->ifa_name, ifname, strlen(ifname)))
-          found = ((struct sockaddr_in *)i->ifa_addr)->sin_addr.s_addr;
-      freeifaddrs(list);
-      if (found) return found;
-    }
-  }
-  return htonl(INADDR_LOOPBACK);
-}
-
-static int in_list(const char *list, const char *name) {
-  char copy[1024];
-  snprintf(copy, sizeof copy, "%s", list);
-  for (char *save = NULL, *e = strtok_r(copy, ", ", &save); e; e = strtok_r(NULL, ", ", &save))
-    if (!strcmp(e, name)) return 1;
-  return 0;
-}
-
-static int dev_by_name(const char *name) {
-  for (int d = 0; d < g.ndevs; ++d)
-    if (!strcmp(g.devs[d].name, name)) return d;
-  return -1;
-}
-
-/* -- routes: NET_SIRCL_ROUTES, NET_SIRCL_WINDOWS, NET_SIRCL_TOPOLOGY -- */
-
-/* Overrides may reduce a direct window or the function allowances, never invent a route.
- * Topology is the admission contract: unknown peers and changed routes fail closed. */
-static ncclResult_t route_overrides(void) {
-  const char *names[] = {"NET_SIRCL_ROUTES", "NET_SIRCL_WINDOWS"};
-  for (int kind = 0; kind < 2; ++kind) {
-    const char *text = getenv(names[kind]);
-    if (!text) continue;
-    if (!*text || strlen(text) >= 2048 || text[0] == ',' || text[strlen(text)-1] == ',' || strstr(text, ",,"))
-      goto invalid;
-    char copy[2048];
-    strcpy(copy, text);
-    uint64_t seen = 0;
-    for (char *save = NULL, *e = strtok_r(copy, ",", &save); e; e = strtok_r(NULL, ",", &save)) {
-      char *eq = strchr(e, '=');
-      if (!eq || eq == e) goto invalid;
-      *eq = 0;
-      for (char *q = e; *q; ++q) if (*q < '0' || *q > '9') goto invalid;
-      errno = 0;
-      char *end;
-      long peer = strtol(e, &end, 10);
-      if (errno || *end || peer < 0 || peer >= g.nhosts || peer == g.position ||
-          !g.routes[peer].ndev || (seen & (UINT64_C(1) << peer))) goto invalid;
-      seen |= UINT64_C(1) << peer;
-      struct route *r = &g.routes[peer];
-      if (!kind) {
-        char expected[160];
-        snprintf(expected, sizeof expected, "%s/%s", g.devs[r->dev[0]].name, g.devs[r->dev[1]].name);
-        if (strcmp(expected, eq + 1)) goto invalid;
-      } else {
-        if (!eq[1]) goto invalid;
-        for (char *q = eq + 1; *q; ++q) if (*q < '0' || *q > '9') goto invalid;
-        errno = 0;
-        unsigned long cap = strtoul(eq + 1, &end, 10);
-        if (errno || *end || cap > MAX_NET_BYTES || (cap && cap < 1024)) goto invalid;
-        if (r->relays) {
-          if (!cap) goto invalid;
-          for (int d = 0; d < g.ndevs; ++d)
-            if (cap < g.relay_windows[d].cap) g.relay_windows[d].cap = (uint32_t)cap;
-        } else r->window = (uint32_t)cap;
-      }
-    }
-    continue;
-invalid:
-    WARN("net-sircl: invalid %s; routes must match topology; relay windows cannot disable the function cap", names[kind]);
-    return ncclInvalidArgument;
-  }
-  return ncclSuccess;
-}
-
-static int my_position_in(const struct sircl_core_topology *t) {
-  long p = g.position;
-  if (p >= 0) return (int)p;
-  char name[256] = {0};
-  if (gethostname(name, sizeof name - 1)) return -1;
-  char *dot = strchr(name, '.');
-  for (int i = 0; i < t->nhosts; ++i) {
-    if (!strcmp(t->host[i], name)) return i;
-    if (dot && (size_t)(dot - name) == strlen(t->host[i]) && !strncmp(t->host[i], name, (size_t)(dot - name)))
-      return i;
-  }
-  return -1;
-}
-
-/* Routes and windows of every reachable peer from a topology file. */
-static int routes_from_topology(const char *path) {
-  struct sircl_core_topology t;
-  char err[512];
-  if (sircl_core_topology_parse(path, &t, err, sizeof err)) {
-    WARN("net-sircl: NET_SIRCL_TOPOLOGY: %s", err);
-    return -1;
-  }
-  int me = my_position_in(&t);
-  if (me < 0 || me >= t.nhosts) {
-    WARN("net-sircl: NET_SIRCL_TOPOLOGY %s does not list this host; set NET_SIRCL_POSITION", path);
-    return -1;
-  }
-  if (t.budget < 65536 || t.budget > 393216) {
-    WARN("net-sircl: topology relay_budget must be in 65536..393216 bytes");
-    return -1;
-  }
-  /* A port has one cable; this excludes ambiguous forwarding graphs. */
-  unsigned occupied[MAX_POSITIONS] = {0};
-  for (int i = 0; i < t.ncables; ++i) {
-    int a = t.cable[i].a, b = t.cable[i].b, pa = t.cable[i].pa, pb = t.cable[i].pb;
-    if ((occupied[a] & (1u << pa)) || (occupied[b] & (1u << pb))) {
-      WARN("net-sircl: topology connects a port more than once");
-      return -1;
-    }
-    occupied[a] |= 1u << pa;
-    occupied[b] |= 1u << pb;
-  }
-  for (int a = 0; a < t.nhosts; ++a)
-    for (int b = a + 1; b < t.nhosts; ++b)
-      if (!strcmp(t.host[a], t.host[b])) return -1;
-  g.position = me;
-  g.nhosts = t.nhosts;
-  if (t.budget < (uint32_t)g.relay_budget) g.relay_budget = (int)t.budget;
-  /* Hash initialized parser output, with an effective budget; equal policy is required at connect.
-   * This is a compatibility fingerprint, not an authentication primitive. */
-  t.budget = (uint32_t)g.relay_budget;
-  g.policy = UINT64_C(14695981039346656037);
-  for (size_t i = 0; i < sizeof t; ++i)
-    g.policy = (g.policy ^ ((const unsigned char *)&t)[i]) * UINT64_C(1099511628211);
-  uint32_t caps[MAX_POSITIONS][ROUTE_FUNCTIONS];
-  g.route_derived = route_allowances(&t, (uint32_t)g.relay_budget, caps);
-  uint32_t ack_caps[MAX_POSITIONS][ROUTE_FUNCTIONS];
-  split_allowances(&t, g.route_derived, caps, ack_caps);
-  /* Include the admission algorithm in the fingerprint as well as the wire
-   * version: equal topology alone does not make unequal policies compatible. */
-  g.policy = (g.policy ^ NET_SIRCL_VERSION) * UINT64_C(1099511628211);
-  unsigned sources = t.nhosts > 2 ? (unsigned)t.nhosts - 2 : 1;
-  for (int d = 0; d < g.ndevs; ++d) {
-    int f = route_function(&t, g.devs[d].name);
-    g.relay_windows[d].cap = f >= 0 ? caps[me][f] : (uint32_t)g.relay_budget / sources / 64u * 64u;
-    g.relay_windows[d].ack_cap = f >= 0 ? ack_caps[me][f] : 0;
-    g.relay_windows[d].relay = 1;
-  }
-  for (int peer = 0; peer < t.nhosts; ++peer) {
-    if (peer == me) continue;
-    const char *fn[2];
-    int relays = 0;
-    if (sircl_core_topology_route(&t, me, peer, fn, &relays) < 0) continue;
-    struct route *r = &g.routes[peer];
-    r->ndev = 0;
-    for (int l = 0; l < NET_SIRCL_MAX_LANES; ++l) {
-      int d = dev_by_name(fn[l]);
-      if (d < 0) {
-        WARN("net-sircl: topology lane %s is not exposed; retain both route lanes in NET_SIRCL_HCA", fn[l]);
-        return -1;
-      }
-      r->dev[r->ndev++] = d;
-    }
-    r->relays = relays;
-    uint32_t a = g.relay_windows[r->dev[0]].cap, b = g.relay_windows[r->dev[1]].cap;
-    r->window = relays > 0 ? (a < b ? a : b) : 0;
-  }
-  return 0;
-}
-
-/* Test hook: the routes a topology file gives `position`, as "<peer>=<fn>/<fn>:<relays>:<window>;...". */
-int net_sircl_topology_routes(const char *path, int position, char *out, size_t len) {
-  struct sircl_core_topology t;
-  char err[512];
-  out[0] = '\0';
-  if (sircl_core_topology_parse(path, &t, err, sizeof err)) {
-    snprintf(out, len, "error: %s", err);
-    return -1;
-  }
-  if (t.budget < 65536 || t.budget > 393216) {
-    snprintf(out, len, "error: relay_budget must be in 65536..393216 bytes");
-    return -1;
-  }
-  uint32_t budget = t.budget < RELAY_BUDGET_DEFAULT ? t.budget : RELAY_BUDGET_DEFAULT;
-  uint32_t caps[MAX_POSITIONS][ROUTE_FUNCTIONS];
-  int derived = route_allowances(&t, budget, caps);
-  uint32_t ack_caps[MAX_POSITIONS][ROUTE_FUNCTIONS];
-  split_allowances(&t, derived, caps, ack_caps);
-  size_t used = 0;
-  for (int peer = 0; peer < t.nhosts; ++peer) {
-    const char *fn[2];
-    int relays = 0;
-    if (peer == position || sircl_core_topology_route(&t, position, peer, fn, &relays) < 0) continue;
-    uint32_t a = caps[position][route_function(&t, fn[0])], b = caps[position][route_function(&t, fn[1])];
-    int n = snprintf(out + used, len - used, "%d=%s/%s:%d:%u;", peer, fn[0], fn[1], relays,
-                     relays > 0 ? (a < b ? a : b) : 0u);
-    if (n < 0 || (size_t)n >= len - used) return -1;
-    used += (size_t)n;
-  }
-  return 0;
-}
-
-static struct window *window_for(int d, int position, uint32_t cap) {
-  if (!cap) return NULL;
-  pthread_mutex_lock(&g.lock);
-  struct window *w = NULL;
-  for (int i = 0; i < g.nwindows && !w; ++i)
-    if (g.windows[i].dev == d && g.windows[i].position == position) w = &g.windows[i];
-  if (!w && g.nwindows < MAX_WINDOWS) {
-    w = &g.windows[g.nwindows++];
-    memset(w, 0, sizeof *w);
-    w->dev = d, w->position = position, w->cap = cap;
-    pthread_mutex_init(&w->lock, NULL);
-  }
-  pthread_mutex_unlock(&g.lock);
-  return w;
-}
+#include "net_sircl_config.h"
 
 /* Abstract socket ownership has no stale file after a crash. Production containers must use
  * the host network namespace, as RDMA deployments do; separate namespaces cannot share this guard. */
@@ -749,422 +501,9 @@ static ncclResult_t sircl_get_properties(int d, ncclNetProperties_v12_t *p) {
 }
 
 /* -- sockets: small, ordered control messages -- */
-static int set_nonblocking(int fd) {
-  int flags = fcntl(fd, F_GETFL, 0);
-  return flags < 0 ? -1 : fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-}
+#include "net_sircl_admission.h"
+#include "net_sircl_connection.h"
 
-static int send_all(int fd, const void *buf, size_t len) {
-  const char *p = buf;
-  int64_t deadline = now_ms() + 10000;
-  while (len) {
-    ssize_t n = send(fd, p, len, MSG_NOSIGNAL);
-    if (n < 0 && (errno == EAGAIN || errno == EINTR)) {
-      if (now_ms() > deadline) return -1;
-      struct pollfd pf = {fd, POLLOUT, 0};
-      poll(&pf, 1, 100);
-      continue;
-    }
-    if (n <= 0) return -1;
-    p += n;
-    len -= (size_t)n;
-  }
-  return 0;
-}
-
-/* Progress a receive of `len` bytes; 1 when complete, 0 when more is due, -1 on failure or end of stream. */
-static int recv_some(int fd, void *buf, size_t len, size_t *got) {
-  while (*got < len) {
-    ssize_t n = recv(fd, (char *)buf + *got, len - *got, 0);
-    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
-    if (n < 0 && errno == EINTR) continue;
-    if (n <= 0) return -1;
-    *got += (size_t)n;
-  }
-  return 1;
-}
-
-/* The peer's end of the comm's socket closed: its process ended or it closed the comm. */
-static int peer_gone(struct comm *c) {
-  if (c->fd < 0) return 0;
-  struct pollfd pf = {c->fd, POLLIN | POLLRDHUP, 0};
-  if (poll(&pf, 1, 0) <= 0) return 0;
-  if (pf.revents & (POLLHUP | POLLERR | POLLRDHUP)) return 1;
-  char b;
-  return (pf.revents & POLLIN) && recv(c->fd, &b, 1, MSG_PEEK) == 0;
-}
-
-/* -- queue pairs -- */
-static void window_join(struct window *w, struct comm *c) {
-  pthread_mutex_lock(&w->lock);
-  c->next = w->members;
-  w->members = c;
-  pthread_mutex_unlock(&w->lock);
-}
-
-static void comm_destroy(struct comm *c) {
-  if (!c) return;
-  if (c->win) pthread_mutex_lock(&c->win->lock);
-  /* Stop the QP before retiring its local accounting. An abandoned relay write may still be
-   * in the fabric: poison the allowance instead of lending its credit to another comm. */
-  if (c->qp) sircl_core_destroy_qp(c->qp);
-  if (c->win) {
-    /* Queued requests belong to the comm; never retain them after free. */
-    struct req **pending = &c->win->pending_head;
-    c->win->pending_tail = NULL;
-    while (*pending) {
-      if ((*pending)->c == c) *pending = (*pending)->pending_next;
-      else {
-        c->win->pending_tail = *pending;
-        pending = &(*pending)->pending_next;
-      }
-    }
-    struct comm **link = &c->win->members;
-    while (*link && *link != c) link = &(*link)->next;
-    if (*link) *link = c->next;
-    if (c->inflight) {
-      if (c->win->relay) c->win->error = ncclRemoteError;
-      else sircl_core_window_release(&c->win->inflight, c->inflight);
-    }
-    pthread_mutex_unlock(&c->win->lock);
-  }
-  if (profile_enabled) profile_close(c);
-  if (c->cq) sircl_core_destroy_cq(c->cq);
-  if (c->ctrl_mr) sircl_core_dereg_mr(c->ctrl_mr);
-  shared_free(c->ctrl);
-  if (c->fd >= 0) close(c->fd);
-  free(c);
-}
-
-static struct comm *comm_create(int d, int is_send) {
-  struct comm *c = calloc(1, sizeof *c);
-  if (!c) return NULL;
-  c->dev = d;
-  c->is_send = is_send;
-  c->fd = -1;
-  c->lane = -1;
-  struct dev *dv = &g.devs[d];
-  c->cq = sircl_core_create_cq(dv->ctx, CQ_DEPTH);
-  c->qp = c->cq ? sircl_core_create_rc_qp(dv->pd, c->cq, SEND_DEPTH, 16) : NULL;
-  c->ctrl = shared_alloc(sizeof *c->ctrl);
-  c->ctrl_mr = c->ctrl ? sircl_core_reg_mr(dv->pd, c->ctrl, sizeof *c->ctrl,
-                                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE) : NULL;
-  if (!c->cq || !c->qp || !c->ctrl || !c->ctrl_mr) {
-    WARN("net-sircl: queue pair setup on %s failed", dv->name);
-    comm_destroy(c);
-    return NULL;
-  }
-  if (sircl_core_qp_init(c->qp, dv->port, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE)) {
-    WARN("net-sircl: queue pair to INIT on %s failed", dv->name);
-    comm_destroy(c);
-    return NULL;
-  }
-  return c;
-}
-
-static void meta_fill(struct comm *c, struct net_sircl_meta *m) {
-  struct dev *dv = &g.devs[c->dev];
-  memset(m, 0, sizeof *m);
-  m->magic = NET_SIRCL_MAGIC;
-  m->qpn = c->qp->qp_num;
-  memcpy(m->gid, dv->gid.raw, 16);
-  m->mtu = (uint32_t)dv->mtu;
-  m->ctrl_rkey = c->ctrl_mr->rkey;
-  m->ctrl_addr = (uint64_t)(uintptr_t)c->ctrl;
-  m->position = g.position;
-  m->lane = c->lane;
-  m->policy = g.policy;
-}
-
-/* Fail fast when this function's interface has no route to the peer's address: a peer beyond a cable needs
- * a relay table on the hosts between, and without one RTR would only time out after about a minute. */
-static ncclResult_t route_check(struct comm *c, const struct net_sircl_meta *r) {
-#ifdef NET_SIRCL_STANDIN
-  (void)c; (void)r;
-  return ncclSuccess;
-#else
-  struct dev *dv = &g.devs[c->dev];
-  static const uint8_t mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
-  if (!dv->netdev[0] || memcmp(r->gid, mapped, 12) || !env_long("NET_SIRCL_ROUTE_CHECK", 1)) return ncclSuccess;
-  int fd = socket(AF_INET, SOCK_DGRAM, 0);
-  if (fd < 0) return ncclSuccess;
-  ncclResult_t result = ncclSuccess;
-  if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, dv->netdev, (socklen_t)strlen(dv->netdev)) == 0) {
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(4791);
-    memcpy(&sa.sin_addr.s_addr, r->gid + 12, 4);
-    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) && (errno == ENETUNREACH || errno == EHOSTUNREACH)) {
-      char ip[INET_ADDRSTRLEN];
-      inet_ntop(AF_INET, &sa.sin_addr, ip, sizeof ip);
-      WARN("net-sircl: no route from %s (%s) to %s, the peer at position %d: a peer beyond a cable needs a relay "
-           "table on the hosts between (README, Peers beyond a cable)", dv->name, dv->netdev, ip, r->position);
-      result = ncclSystemError;
-    }
-  }
-  close(fd);
-  return result;
-#endif
-}
-
-static ncclResult_t comm_ready(struct comm *c, const struct net_sircl_meta *r) {
-  struct dev *dv = &g.devs[c->dev];
-  if (r->magic != NET_SIRCL_MAGIC) {
-    WARN("net-sircl: peer metadata has magic %08x", r->magic);
-    return ncclRemoteError;
-  }
-  if (r->policy != g.policy || r->position < 0 || r->position >= g.nhosts ||
-      !g.routes[r->position].ndev) {
-    WARN("net-sircl: peer topology/budget disagreement or unknown position %d", r->position);
-    return ncclRemoteError;
-  }
-  ncclResult_t rc = route_check(c, r);
-  if (rc != ncclSuccess) return rc;
-  struct sircl_core_qp_peer peer = {
-    .qpn = r->qpn, .mtu = r->mtu < (uint32_t)dv->mtu ? r->mtu : (uint32_t)dv->mtu,
-    .port = dv->port, .gid_index = (uint8_t)dv->gid_index, .hop_limit = 64,
-    .traffic_class = (uint8_t)g.traffic_class
-  };
-  if (peer.mtu < IBV_MTU_256 || peer.mtu > IBV_MTU_4096) return ncclRemoteError;
-  c->mtu_bytes = 128u << peer.mtu;
-  memcpy(peer.gid, r->gid, 16);
-  if (sircl_core_qp_rtr(c->qp, &peer)) {
-    WARN("net-sircl: queue pair to RTR on %s failed: %s (peer position %d unreachable from this function?)",
-         dv->name, strerror(errno), r->position);
-    return ncclSystemError;
-  }
-  if (sircl_core_qp_rts(c->qp, (unsigned)g.ib_timeout, (unsigned)g.ib_retry_cnt)) {
-    WARN("net-sircl: queue pair to RTS on %s failed: %s", dv->name, strerror(errno));
-    return ncclSystemError;
-  }
-  c->rctrl_addr = r->ctrl_addr;
-  c->rctrl_rkey = r->ctrl_rkey;
-  c->peer_position = r->position;
-  const struct route *route = &g.routes[r->position];
-  c->win = route->relays ? &g.relay_windows[c->dev] :
-           c->is_send ? window_for(c->dev, r->position, route->window) : NULL;
-  if (c->is_send && route->window && !c->win) return ncclSystemError;
-  if (c->win) window_join(c->win, c);
-  return ncclSuccess;
-}
-
-static const struct route *route_of(int position) {
-  if (position < 0 || position >= MAX_POSITIONS || g.routes[position].ndev == 0) return NULL;
-  return &g.routes[position];
-}
-
-/* The connector's lane and function toward `position`: NCCL's device when it is one of the route's lanes
- * (NCCL spreads its channels over the devices, which keeps both PCI functions of a cable busy), else the
- * route's lanes in turn. Without a route, NCCL's device and no lane. */
-static int connect_dev(int position, int nccl_dev, int *lane) {
-  struct route *r = (struct route *)route_of(position);
-  *lane = -1;
-  if (!r) return nccl_dev;
-  for (int l = 0; l < r->ndev; ++l)
-    if (r->dev[l] == nccl_dev) {
-      *lane = l;
-      return nccl_dev;
-    }
-  pthread_mutex_lock(&g.lock);
-  *lane = (int)(r->next++ % (unsigned)r->ndev);
-  pthread_mutex_unlock(&g.lock);
-  return r->dev[*lane];
-}
-
-/* The acceptor's function: the connector's lane of this side's route toward the connector, so both ends of
- * the queue pair are the same function class on the same path. */
-static int accept_dev(int position, int lane, int listen_dev) {
-  const struct route *r = route_of(position);
-  if (!r) return listen_dev;
-  if (lane >= 0 && lane < r->ndev) return r->dev[lane];
-  for (int l = 0; l < r->ndev; ++l)
-    if (r->dev[l] == listen_dev) return listen_dev;
-  return r->dev[0];
-}
-
-/* -- listen / connect / accept -- */
-static ncclResult_t sircl_listen(void *ctx, int d, void *handle, void **listenComm) {
-  (void)ctx;
-  if (d < 0 || d >= g.ndevs) return ncclInvalidArgument;
-  struct net_sircl_handle *h = handle;
-  memset(handle, 0, NCCL_NET_HANDLE_MAXSIZE);
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return ncclSystemError;
-  struct sockaddr_in sa;
-  memset(&sa, 0, sizeof sa);
-  sa.sin_family = AF_INET;
-  sa.sin_addr.s_addr = htonl(INADDR_ANY);
-  socklen_t len = sizeof sa;
-  if (bind(fd, (struct sockaddr *)&sa, sizeof sa) || listen(fd, 128) ||
-      getsockname(fd, (struct sockaddr *)&sa, &len) || set_nonblocking(fd)) {
-    close(fd);
-    return ncclSystemError;
-  }
-  h->magic = NET_SIRCL_MAGIC;
-  h->version = NET_SIRCL_VERSION;
-  h->port = sa.sin_port;
-  h->addr = g.oob_addr;
-  h->position = g.position;
-  h->pending = 0;
-  struct listen_comm *l = calloc(1, sizeof *l);
-  if (!l) {
-    close(fd);
-    return ncclSystemError;
-  }
-  l->fd = fd;
-  l->dev = d;
-  *listenComm = l;
-  return ncclSuccess;
-}
-
-static void pending_drop(struct pending *p) {
-  if (!p) return;
-  if (p->c) comm_destroy(p->c);
-  if (p->fd >= 0) close(p->fd);
-  free(p);
-}
-
-static ncclResult_t connect_fail(struct net_sircl_handle *h, struct pending *p, ncclResult_t r) {
-  h->pending = 0;
-  pending_drop(p);
-  return r;
-}
-
-static ncclResult_t sircl_connect(void *ctx, int d, void *handle, void **sendComm,
-                                  ncclNetDeviceHandle_v12_t **sendDevComm) {
-  (void)ctx;
-  (void)sendDevComm;
-  *sendComm = NULL;
-  struct net_sircl_handle *h = handle;
-  if (h->magic != NET_SIRCL_MAGIC || h->version != NET_SIRCL_VERSION) {
-    WARN("net-sircl: handle magic %08x version %u", h->magic, h->version);
-    return ncclInvalidArgument;
-  }
-  if (!route_of(h->position)) return ncclInvalidArgument;
-  struct pending *p = (struct pending *)(uintptr_t)h->pending;
-  if (!p) {
-    p = calloc(1, sizeof *p);
-    if (!p) return ncclSystemError;
-    p->deadline_ms = now_ms() + g.connect_timeout_ms;
-    int lane = -1;
-    p->dev = connect_dev(h->position, d, &lane);
-    p->fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (p->fd < 0 || set_nonblocking(p->fd)) return connect_fail(h, p, ncclSystemError);
-    int one = 1;
-    setsockopt(p->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin_family = AF_INET;
-    sa.sin_port = h->port;
-    sa.sin_addr.s_addr = h->addr;
-    if (connect(p->fd, (struct sockaddr *)&sa, sizeof sa) && errno != EINPROGRESS) {
-      WARN("net-sircl: connecting to the listener: %s", strerror(errno));
-      return connect_fail(h, p, ncclSystemError);
-    }
-    p->c = comm_create(p->dev, 1);
-    if (!p->c) return connect_fail(h, p, ncclSystemError);
-    p->c->lane = lane;
-    p->state = P_CONNECTING;
-    h->pending = (uint64_t)(uintptr_t)p;
-  }
-  if (now_ms() > p->deadline_ms) {
-    WARN("net-sircl: connecting to position %d timed out after %d ms (NET_SIRCL_CONNECT_TIMEOUT_MS)", h->position,
-         g.connect_timeout_ms);
-    return connect_fail(h, p, ncclSystemError);
-  }
-  if (p->state == P_CONNECTING) {
-    struct pollfd pf = {p->fd, POLLOUT, 0};
-    if (poll(&pf, 1, 0) <= 0) return ncclSuccess;
-    int err = 0;
-    socklen_t len = sizeof err;
-    getsockopt(p->fd, SOL_SOCKET, SO_ERROR, &err, &len);
-    if (err) {
-      WARN("net-sircl: connecting to the listener: %s", strerror(err));
-      return connect_fail(h, p, ncclSystemError);
-    }
-    meta_fill(p->c, &p->mine);
-    if (send_all(p->fd, &p->mine, sizeof p->mine)) return connect_fail(h, p, ncclSystemError);
-    p->state = P_WAIT_META;
-  }
-  if (p->state == P_WAIT_META) {
-    int r = recv_some(p->fd, &p->theirs, sizeof p->theirs, &p->got);
-    if (r < 0) return connect_fail(h, p, ncclRemoteError);
-    if (r == 0) return ncclSuccess;
-    ncclResult_t rr = comm_ready(p->c, &p->theirs);
-    if (rr != ncclSuccess) return connect_fail(h, p, rr);
-    /* Ready: this queue pair is at RTS, so the acceptor may let its side write (as NCCL's IB transport
-     * finishes its connect). */
-    uint8_t ready = 1;
-    if (send_all(p->fd, &ready, 1)) return connect_fail(h, p, ncclSystemError);
-    p->c->fd = p->fd;
-    p->fd = -1;
-    *sendComm = p->c;
-    INFO("net-sircl: send comm on %s (lane %d) to position %d, window %u", g.devs[p->c->dev].name, p->c->lane,
-         p->c->peer_position, p->c->win ? p->c->win->cap : 0u);
-    p->c = NULL;
-    h->pending = 0;
-    free(p);
-  }
-  return ncclSuccess;
-}
-
-static ncclResult_t accept_fail(struct listen_comm *l, ncclResult_t r) {
-  pending_drop(l->accepting);
-  l->accepting = NULL;
-  return r;
-}
-
-static ncclResult_t sircl_accept(void *listenComm, void **recvComm, ncclNetDeviceHandle_v12_t **recvDevComm) {
-  (void)recvDevComm;
-  *recvComm = NULL;
-  struct listen_comm *l = listenComm;
-  struct pending *p = l->accepting;
-  if (!p) {
-    int fd = accept(l->fd, NULL, NULL);
-    if (fd < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? ncclSuccess : ncclSystemError;
-    p = calloc(1, sizeof *p);
-    if (!p) {
-      close(fd);
-      return ncclSystemError;
-    }
-    p->fd = fd;
-    set_nonblocking(fd);
-    p->state = P_WAIT_META;
-    p->deadline_ms = now_ms() + g.connect_timeout_ms;
-    l->accepting = p;
-  }
-  if (now_ms() > p->deadline_ms) {
-    WARN("net-sircl: accepting a connection timed out after %d ms (NET_SIRCL_CONNECT_TIMEOUT_MS)",
-         g.connect_timeout_ms);
-    return accept_fail(l, ncclSystemError);
-  }
-  if (p->state == P_WAIT_META) {
-    int r = recv_some(p->fd, &p->theirs, sizeof p->theirs, &p->got);
-    if (r < 0) return accept_fail(l, ncclRemoteError);
-    if (r == 0) return ncclSuccess;
-    p->c = comm_create(accept_dev(p->theirs.position, p->theirs.lane, l->dev), 0);
-    if (!p->c) return accept_fail(l, ncclSystemError);
-    p->c->lane = p->theirs.lane;
-    meta_fill(p->c, &p->mine);
-    if (send_all(p->fd, &p->mine, sizeof p->mine)) return accept_fail(l, ncclSystemError);
-    ncclResult_t rr = comm_ready(p->c, &p->theirs);
-    if (rr != ncclSuccess) return accept_fail(l, rr);
-    p->state = P_WAIT_READY;
-  }
-  int r = recv_some(p->fd, &p->ready, 1, &p->ready_got);
-  if (r < 0) return accept_fail(l, ncclRemoteError);
-  if (r == 0) return ncclSuccess;
-  p->c->fd = p->fd;
-  p->fd = -1;
-  *recvComm = p->c;
-  p->c = NULL;
-  l->accepting = NULL;
-  free(p);
-  return ncclSuccess;
-}
-
-/* -- memory -- */
 static ncclResult_t sircl_reg_mr(void *comm, void *data, size_t size, int type, void **mhandle) {
   struct comm *c = comm;
   if (type != NCCL_PTR_HOST) {
@@ -1207,7 +546,10 @@ static ncclResult_t sircl_dereg_mr(void *comm, void *mhandle) {
   (void)comm;
   struct mr *m = mhandle;
   if (!m) return ncclSuccess;
-  if (m->ib) sircl_core_dereg_mr(m->ib);
+  if (m->ib && sircl_core_dereg_mr(m->ib)) {
+    WARN("net-sircl: memory deregistration failed; registration ownership retained");
+    return ncclSystemError;
+  }
   shared_free(m->shadow);
   free(m);
   return ncclSuccess;
@@ -1230,63 +572,6 @@ static int post_write(struct comm *c, uint64_t laddr, uint32_t lkey, uint32_t le
                                (signaled ? IBV_SEND_SIGNALED : 0) | (inline_data ? IBV_SEND_INLINE : 0), wr_id);
 }
 
-/* Charge 64-byte buffer strides plus 128 bytes of frame overhead and one 128-byte ACK
- * per packet. RC send completion proves both the write and its ACK have left the relay path.
- * The reserve counts both directions, even if the hardware gives them independent queues. */
-static uint64_t write_charge(struct comm *c, uint32_t bytes) {
-  if (!c->win || !c->win->relay) return bytes;
-  uint64_t packets = bytes ? ((uint64_t)bytes + c->mtu_bytes - 1) / c->mtu_bytes : 1;
-  return (((uint64_t)bytes + 63u) & ~UINT64_C(63)) + packets * 256u;
-}
-
-static uint64_t ack_charge(struct comm *c, uint32_t bytes) {
-  if (!c->win || !c->win->ack_cap) return 0;
-  return 128u * (bytes ? ((uint64_t)bytes + c->mtu_bytes - 1) / c->mtu_bytes : 1);
-}
-
-static int window_take(struct window *w, uint64_t bytes) {
-  return !w->error && sircl_core_window_claim(&w->inflight, &w->max_inflight, w->cap, bytes, 0);
-}
-
-/* Reserve both resources atomically under the shared window lock. No WR is
- * posted while holding only one resource, so there is no resource wait cycle. */
-static int window_take_ack(struct window *w, uint64_t bytes, uint64_t ack) {
-  if (w->ack_cap && ack > w->ack_cap - w->ack_inflight) return 0;
-  if (!window_take(w, bytes)) return 0;
-  w->ack_inflight += ack;
-  return 1;
-}
-
-/* Caller holds the window lock. Fit the available charge, retaining at least two
- * independently completed pieces per full allowance when two 4 KiB pieces fit.
- * Avoid tiny residual writes unless they finish a request or the entire allowance
- * is smaller: otherwise packet/CQE overhead defeats the larger completion chunks. */
-static uint32_t chunk_bytes(struct comm *c, uint32_t left) {
-  uint32_t hi = left < g.chunk ? left : g.chunk, lo = 0;
-  if (c->win->ack_cap) {
-    uint64_t packet_bytes = (c->win->ack_cap - c->win->ack_inflight) / 128u * c->mtu_bytes;
-    if (packet_bytes < hi) hi = (uint32_t)packet_bytes;
-  }
-  uint64_t cap = c->win->cap;
-  uint64_t available = cap - c->win->inflight;
-  uint64_t target = cap >= 2 * write_charge(c, 4096) ? cap / 2 : cap;
-  if (available < target) target = available;
-  /* Saturated channels are the common retry case: avoid a binary search when
-   * even the smallest useful piece must wait for a completion. */
-  uint32_t minimum = cap >= write_charge(c, 4096) ? (left < 4096 ? left : 4096) : 1;
-  if (target < write_charge(c, minimum)) return 0;
-  if (hi < minimum) return 0;
-  if (write_charge(c, hi) <= target) return hi;
-  while (lo < hi) {
-    uint32_t mid = lo + (hi - lo + 1) / 2;
-    if (write_charge(c, mid) <= target) lo = mid;
-    else hi = mid - 1;
-  }
-  if (lo < left) lo &= ~63u;
-  if (lo < 4096 && lo < left && cap >= write_charge(c, 4096)) return 0;
-  return lo;
-}
-
 /* Post what the window allows of a send, then its size and done words. */
 static ncclResult_t send_progress(struct comm *c, struct req *q) {
   while (q->posted < q->total) {
@@ -1296,28 +581,22 @@ static ncclResult_t send_progress(struct comm *c, struct req *q) {
     if (!piece) return ncclSuccess;
     uint64_t charge = write_charge(c, piece);
     uint64_t ack = ack_charge(c, piece);
-    if (c->win && !window_take_ack(c->win, charge, ack)) return c->win->error;
+    if (!admission_reserve(c, charge, ack)) return c->win->error;
     if (post_write(c, q->laddr + q->posted, q->lkey, piece, q->raddr + q->posted, q->rkey, 0, c->win != NULL,
                    WR_ACK_ID(WR_DATA, charge, q->slot, ack))) {
-      if (c->win) {
-        sircl_core_window_release(&c->win->inflight, charge);
-        c->win->ack_inflight -= ack;
-        c->win->error = ncclSystemError;
-      }
+      admission_cancel(c, charge, ack);
       WARN("net-sircl: posting %u payload bytes: %s", piece, strerror(errno));
       return ncclSystemError;
     }
     q->posted += piece;
     c->chunks++;
-    if (c->win) c->inflight += charge;
   }
   if (!q->final_posted) {
     uint64_t charge = c->win && c->win->relay ? 2 * write_charge(c, 4) : 0;
     uint64_t ack = 2 * ack_charge(c, 4);
-    int blocked = charge && !window_take_ack(c->win, charge, ack);
+    int blocked = !admission_reserve(c, charge, ack);
     if (profile_enabled) profile_wait(c, q, blocked);
     if (blocked) return c->win->error;
-    c->inflight += charge;
     uint32_t size = q->total, seq = q->seq + 1;
     uint64_t base = c->rctrl_addr;
     if (post_write(c, (uint64_t)(uintptr_t)&size, 0, 4, base + offsetof(struct net_sircl_ctrl, done_size) + 4 * q->slot,
@@ -1410,8 +689,7 @@ static ncclResult_t recv_progress(struct comm *c, struct req *q) {
   if (q->cts_posted) return ncclSuccess;
   uint64_t charge = c->win ? write_charge(c, sizeof(struct net_sircl_cts)) + write_charge(c, 4) : 0;
   uint64_t ack = ack_charge(c, sizeof(struct net_sircl_cts)) + ack_charge(c, 4);
-  if (charge && !window_take_ack(c->win, charge, ack)) return c->win->error;
-  c->inflight += charge;
+  if (!admission_reserve(c, charge, ack)) return c->win->error;
   struct net_sircl_cts *e = &c->ctrl->cts[q->slot];
   uint32_t seq = q->seq + 1;
   uint64_t base = c->rctrl_addr;
@@ -1425,40 +703,6 @@ static ncclResult_t recv_progress(struct comm *c, struct req *q) {
   }
   q->cts_posted = 1;
   return ncclSuccess;
-}
-
-static void pending_append(struct window *w, struct req *q) {
-  q->pending_next = NULL;
-  if (w->pending_tail) w->pending_tail->pending_next = q;
-  else w->pending_head = q;
-  w->pending_tail = q;
-}
-
-/* FIFO requests, independent of CQ ownership. A blocked head retains its turn
- * until all its writes are posted. Both resources are acquired together by
- * the ordinary posting functions. Enqueueing reserves no credit; posted WRs
- * keep their charge until RC completion. A visit stops when credit is short. */
-static ncclResult_t advance_pending(struct window *w) {
-  while (w->pending_head) {
-    struct req *q = w->pending_head;
-    ncclResult_t r = q->is_send ? send_progress(q->c, q) : recv_progress(q->c, q);
-    if (r != ncclSuccess) return r;
-    int finished = q->is_send ? q->final_posted : q->cts_posted;
-    if (!finished) return ncclSuccess;
-    w->pending_head = q->pending_next;
-    if (!w->pending_head) w->pending_tail = NULL;
-    q->pending_next = NULL;
-    if (profile_enabled) profile_wait(q->c, q, 0);
-  }
-  return ncclSuccess;
-}
-
-static ncclResult_t submit_progress(struct comm *c, struct req *q) {
-  if (!c->win || !c->win->relay)
-    return q->is_send ? send_progress(c, q) : recv_progress(c, q);
-  pending_append(c->win, q);
-  if (profile_enabled && q->is_send && c->win->pending_head != q) profile_wait(c, q, 1);
-  return advance_pending(c->win);
 }
 
 static ncclResult_t irecv_locked(void *recvComm, int n, void **data, size_t *sizes, int *tags, void **mhandles,
@@ -1485,6 +729,7 @@ static ncclResult_t irecv_locked(void *recvComm, int n, void **data, size_t *siz
   q->c = c;
   q->seq = c->seq++;
   q->slot = slot;
+  q->total = e->size;
   q->user = data[0];
   q->shadow = (m && m->shadow) ? (uint8_t *)(uintptr_t)e->addr : NULL;
   ncclResult_t r = submit_progress(c, q);
@@ -1531,60 +776,13 @@ static ncclResult_t drain(struct comm *c) {
       uint64_t id = wc[i].wr_id;
       int kind = (int)(id >> 56);
       uint32_t slot = (uint32_t)(id & 0xff);
-      if (c->win) {
-        uint64_t bytes = WR_CHARGE(id);
-        c->win->ack_inflight -= WR_ACK(id);
-        c->inflight -= bytes;
-        sircl_core_window_release(&c->win->inflight, bytes);
-      }
+      admission_complete(c, id);
       if (profile_enabled) profile_complete(c, id);
       if (kind == WR_FINAL && slot < NET_SIRCL_SLOTS) c->reqs[slot].done = 1;
       if (kind == WR_CTS && slot < NET_SIRCL_SLOTS) c->reqs[slot].cts_done = 1;
     }
   }
   return n < 0 ? ncclSystemError : ncclSuccess;
-}
-
-/* Post a windowed comm's waiting payload or CTS writes, oldest request first. */
-static ncclResult_t advance(struct comm *c) {
-  for (uint32_t s = c->head; s != c->seq; ++s) {
-    struct req *q = &c->reqs[s % NET_SIRCL_SLOTS];
-    if (!q->used) continue;
-    ncclResult_t r = q->is_send ? send_progress(c, q) : recv_progress(c, q);
-    if (r != ncclSuccess) return r;
-    if (q->is_send ? !q->final_posted : !q->cts_posted) break;
-  }
-  return ncclSuccess;
-}
-
-/* Caller holds the shared window lock across progress and request retirement. */
-static ncclResult_t poll_cq(struct comm *c) {
-  if (c->error) return c->error;
-  if (!c->win) return drain(c);
-  struct window *w = c->win;
-  if (w->error) return w->error;
-  for (struct comm *m = w->members; m; m = m->next) {
-    /* Every relay CQE carries positive charge, including CTS and final pairs.
-     * A zero balance proves there is nothing to reap; receive done words are
-     * still checked by test_locked. Explicit direct windows have zero-charge
-     * final CQEs and must retain unconditional polling. */
-    ncclResult_t r = ncclSuccess;
-    if (!w->relay || m->inflight) r = drain(m);
-    if (r != ncclSuccess) return w->error = r;
-    /* Reuse completed credit before polling unrelated CQs, granting it to
-     * the oldest waiting request rather than preferentially to the CQ owner. */
-    r = w->relay ? advance_pending(w) : advance(m);
-    if (r != ncclSuccess) return w->error = r;
-  }
-  /* Rotate CQ visits; relay admission has its own FIFO order. */
-  if (w->members && w->members->next) {
-    struct comm *first = w->members, *last = first;
-    while (last->next) last = last->next;
-    w->members = first->next;
-    first->next = NULL;
-    last->next = first;
-  }
-  return ncclSuccess;
 }
 
 static ncclResult_t test_locked(void *request, int *done, int *sizes) {
@@ -1601,6 +799,12 @@ static ncclResult_t test_locked(void *request, int *done, int *sizes) {
     if (__atomic_load_n(&c->ctrl->done_seq[q->slot], __ATOMIC_ACQUIRE) != q->seq + 1)
       return check_wait(c, q->started_ms);
     uint32_t got = __atomic_load_n(&c->ctrl->done_size[q->slot], __ATOMIC_ACQUIRE);
+    if (got > q->total) {
+      WARN("net-sircl: receive completion length %u exceeds capacity %u", got, q->total);
+      c->error = ncclRemoteError;
+      if (c->win) c->win->error = ncclRemoteError;
+      return ncclRemoteError;
+    }
     if (q->shadow && got) memcpy(q->user, q->shadow, got);
     if (sizes) *sizes = (int)got;
   }
@@ -1622,13 +826,11 @@ static ncclResult_t sircl_test(void *request, int *done, int *sizes) {
 
 /* Closing never waits for the peer: outstanding requests are abandoned with their queue pair. */
 static ncclResult_t sircl_close_send(void *sendComm) {
-  comm_destroy(sendComm);
-  return ncclSuccess;
+  return comm_destroy(sendComm);
 }
 
 static ncclResult_t sircl_close_recv(void *recvComm) {
-  comm_destroy(recvComm);
-  return ncclSuccess;
+  return comm_destroy(recvComm);
 }
 
 static ncclResult_t sircl_close_listen(void *listenComm) {

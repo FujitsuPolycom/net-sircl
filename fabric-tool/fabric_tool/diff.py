@@ -110,14 +110,15 @@ class _Script:
     qdisc_del: list[str] = dataclasses.field(default_factory=list)
     record: list[str] = dataclasses.field(default_factory=list)
 
-    def lines(self, hostname: str) -> list[str]:
+    def lines(self, hostname: str, *, check_hostname: bool = True) -> list[str]:
         body = (self.qdisc_add + self.filter_del + self.filter_add + self.neigh_set + self.route_set
                 + self.marker_stop + self.marker_start + self.route_del + self.neigh_del + self.qdisc_del
                 + self.record)
         if not body:
             return []
         settle = [commands.SETTLE] if self.marker_start else []
-        return [commands.HEADER, commands.guard(hostname), *body, *settle]
+        guard = [commands.guard(hostname)] if check_hostname else []
+        return [commands.HEADER, *guard, *body, *settle]
 
 
 def _route_equal(entry: RouteEntry, destination: str, netdev: str, source: str) -> bool:
@@ -125,15 +126,15 @@ def _route_equal(entry: RouteEntry, destination: str, netdev: str, source: str) 
             and entry.metric == 0 and entry.kind == "unicast" and entry.destination == destination)
 
 
-def _route_removal(entry: RouteEntry) -> str:
-    return commands.route_del(entry.destination, entry.dev, protocol=entry.protocol, metric=entry.metric)
+def _route_removal(entry: RouteEntry, bindings: model.FabricBindings) -> str:
+    return commands.route_del(entry.destination, entry.dev, protocol=entry.protocol, metric=entry.metric, bindings=bindings)
 
 
-def _filter_removal(entries: Sequence[FilterEntry]) -> list[str]:
+def _filter_removal(entries: Sequence[FilterEntry], bindings: model.FabricBindings) -> list[str]:
     if len(entries) == 1 and entries[0].protocol is not None and entries[0].handle is not None:
         entry = entries[0]
-        return [commands.filter_del(entry.netdev, entry.pref, protocol=entry.protocol, handle=entry.handle)]
-    return [commands.filter_del(entries[0].netdev, entries[0].pref)]
+        return [commands.filter_del(entry.netdev, entry.pref, protocol=entry.protocol, handle=entry.handle, bindings=bindings)]
+    return [commands.filter_del(entries[0].netdev, entries[0].pref, bindings=bindings)]
 
 
 def _common_blockers(diff: HostDiff, state: HostState, *, check_hostname: bool) -> bool:
@@ -203,7 +204,7 @@ def _marker_blockers(state: HostState, marker: commands.MarkerConfig) -> list[st
 def _marker_changes(diff: HostDiff, script: _Script, state: HostState, host: HostPlan | None,
                     marker: commands.MarkerConfig) -> None:
     handled = set()
-    for device in model.RDMA_DEVICES:
+    for device in state.bindings.devices:
         planned = host.marker(device) if host is not None else None
         wanted = frozenset(planned.rules) if planned is not None else frozenset()
         present = [process for process in state.markers if process.device == device]
@@ -217,7 +218,7 @@ def _marker_changes(diff: HostDiff, script: _Script, state: HostState, host: Hos
         for process in present:
             script.marker_stop.extend(commands.marker_stop(marker, process.pid))
         if wanted:
-            script.marker_start.extend(commands.marker_start(marker, device, planned.rules if planned else ()))
+            script.marker_start.extend(commands.marker_start(marker, device, planned.rules if planned else (), bindings=state.bindings))
             before = "; ".join(process.text() + ("" if process.argv[:1] == (marker.path,) else
                                                  f" (executable {process.argv[0]})") for process in present)
             diff.changes.append(Change("marker", "replace" if present else "add", device,
@@ -240,25 +241,45 @@ def _record(host: HostPlan, plan: GroupPlan, layout_name: str, marker: commands.
             "qdiscs": sorted(qdiscs)}
 
 
+@dataclasses.dataclass(frozen=True)
+class ReconcilePolicy:
+    mode: str
+    remove_stale: bool
+    require_adoption: bool
+    persist_record: bool = True
+
+
+APPLY = ReconcilePolicy("up", True, True)
+RESTORE = ReconcilePolicy("boot", False, False)
+REMOVE = ReconcilePolicy("down", True, True, False)
+
+
 def compare_up(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name: str,
                marker: commands.MarkerConfig, adopt: bool, check_hostname: bool = True) -> HostDiff:
+    """Reconcile desired resources and remove stale owned resources."""
+    return _reconcile(state, host, plan, layout_name=layout_name, marker=marker,
+                      adopt=adopt, check_hostname=check_hostname, policy=APPLY, group=plan.group.label)
+
+
+def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan | None, *, layout_name: str,
+               marker: commands.MarkerConfig, adopt: bool, check_hostname: bool, policy: ReconcilePolicy, group: str) -> HostDiff:
     """What ``apply`` changes on one host to install its group's plan."""
-    diff = HostDiff(host.position, host.name, plan.group.label, "up")
+    diff = HostDiff(host.position, host.name, group, policy.mode)
     if _common_blockers(diff, state, check_hostname=check_hostname):
         return diff
     script = _Script()
-    removed_filters = {netdev: 0 for netdev in model.FABRIC_NETDEVS}
+    removed_filters = {netdev: 0 for netdev in state.bindings.netdevs}
 
     # Relay filters (reserved preferences) and the ingress qdiscs they need.
     added_qdiscs = []
-    for netdev in model.FABRIC_NETDEVS:
+    for netdev in state.bindings.netdevs:
         planned = {relay_filter.pref: relay_filter for relay_filter in host.filters
                    if relay_filter.in_netdev == netdev}
         present: dict[int, list[FilterEntry]] = {}
         for entry in state.reserved_filters(netdev):
             present.setdefault(entry.pref, []).append(entry)
         if planned and state.ingress_qdisc.get(netdev) is None:
-            script.qdisc_add.append(commands.qdisc_add(netdev))
+            script.qdisc_add.append(commands.qdisc_add(netdev, bindings=state.bindings))
             added_qdiscs.append(netdev)
             diff.changes.append(Change("qdisc", "add", netdev, "ingress"))
         for pref, relay_filter in sorted(planned.items()):
@@ -269,14 +290,14 @@ def compare_up(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name
                 diff.changes.append(Change("filter", "keep", f"{netdev} pref {pref}", wanted))
                 continue
             if entries:
-                script.filter_del.extend(_filter_removal(entries))
+                script.filter_del.extend(_filter_removal(entries, state.bindings))
                 removed_filters[netdev] += len(entries)
-            script.filter_add.append(commands.filter_add(relay_filter))
+            script.filter_add.append(commands.filter_add(relay_filter, bindings=state.bindings))
             before = "; ".join(entry.text() for entry in entries)
             diff.changes.append(Change("filter", "replace" if entries else "add", f"{netdev} pref {pref}",
                                        f"{before} -> {wanted}" if entries else wanted))
-        for pref, entries in sorted(present.items()):
-            script.filter_del.extend(_filter_removal(entries))
+        for pref, entries in sorted(present.items()) if policy.remove_stale else ():
+            script.filter_del.extend(_filter_removal(entries, state.bindings))
             removed_filters[netdev] += len(entries)
             diff.changes.append(Change("filter", "remove", f"{netdev} pref {pref}",
                                        "; ".join(entry.text() for entry in entries)))
@@ -293,30 +314,31 @@ def compare_up(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name
         foreign = [entry for entry in entries if entry not in candidates]
         want = f"dev {route.netdev} src {route.source} -> position {route.peer} {route.peer_netdev}"
         if foreign:
-            diff.blockers.append(f"route {destination}/32 is held by a route that is not a relay route "
+            messages = diff.blockers if policy.require_adoption else diff.notes
+            messages.append(f"route {destination}/32 is held by a route that is not a relay route "
                                  f"({foreign[0].text()}); it is never touched")
             continue
         # `ip route replace` rewrites the metric-0 route in place; routes at other metrics are removed.
         equal = next((entry for entry in candidates
                       if _route_equal(entry, destination, route.netdev, route.source)), None)
         in_place = equal or next((entry for entry in candidates if entry.metric == 0), None)
-        for entry in candidates:
+        for entry in candidates if policy.remove_stale else ():
             if entry is not in_place:
-                script.route_del.append(_route_removal(entry))
+                script.route_del.append(_route_removal(entry, state.bindings))
                 diff.changes.append(Change("route", "remove", f"{destination}/32", entry.text(), not entry.owned))
         if equal is not None:
             action = "keep" if equal.owned else "mark"
             diff.changes.append(Change("route", action, f"{destination}/32", want, not equal.owned))
             if action == "mark":
-                script.route_set.append(commands.route_replace(destination, route.netdev, route.source))
+                script.route_set.append(commands.route_replace(destination, route.netdev, route.source, bindings=state.bindings))
         else:
-            script.route_set.append(commands.route_replace(destination, route.netdev, route.source))
+            script.route_set.append(commands.route_replace(destination, route.netdev, route.source, bindings=state.bindings))
             diff.changes.append(Change("route", "replace" if in_place else "add", f"{destination}/32",
                                        f"{in_place.text()} -> {want}" if in_place else want,
                                        bool(in_place and not in_place.owned)))
     for entry in state.relay_routes():
-        if entry.destination not in planned_routes:
-            script.route_del.append(_route_removal(entry))
+        if policy.remove_stale and entry.destination not in planned_routes:
+            script.route_del.append(_route_removal(entry, state.bindings))
             diff.changes.append(Change("route", "remove", f"{entry.destination}/32", entry.text(), not entry.owned))
 
     planned_neighbours = {(route.destination, route.netdev): route.next_mac for route in host.routes}
@@ -329,168 +351,60 @@ def compare_up(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name
             action = "keep" if entry.owned else "mark"
             diff.changes.append(Change("neighbour", action, f"{destination} dev {netdev}", mac, not entry.owned))
             if action == "mark":
-                script.neigh_set.append(commands.neigh_replace(destination, mac, netdev))
+                script.neigh_set.append(commands.neigh_replace(destination, mac, netdev, bindings=state.bindings))
             continue
-        script.neigh_set.append(commands.neigh_replace(destination, mac, netdev))
+        script.neigh_set.append(commands.neigh_replace(destination, mac, netdev, bindings=state.bindings))
         diff.changes.append(Change("neighbour", "replace" if entry else "add", f"{destination} dev {netdev}",
                                    f"{entry.mac} -> {mac}" if entry else mac, bool(entry and not entry.owned)))
-    for (destination, netdev), entry in sorted(present_neighbours.items()):
-        script.neigh_del.append(commands.neigh_del(destination, netdev))
+    for (destination, netdev), entry in sorted(present_neighbours.items()) if policy.remove_stale else ():
+        script.neigh_del.append(commands.neigh_del(destination, netdev, bindings=state.bindings))
         diff.changes.append(Change("neighbour", "remove", f"{destination} dev {netdev}", entry.text(),
                                    not entry.owned))
 
     _marker_changes(diff, script, state, host, marker)
 
     # Qdiscs the record lists as added by the tool and that no filter needs any more.
-    record = state.record if state.record and state.record.get("group") == plan.group.label else None
+    record = state.record if state.record and state.record.get("group") == group else None
     recorded = set(record.get("qdiscs", [])) if record else set()
     kept = set(added_qdiscs) | recorded
-    for netdev in sorted(recorded):
+    for netdev in sorted(recorded) if policy.remove_stale else ():
         remaining = len(state.filters.get(netdev, [])) - removed_filters[netdev]
         if netdev not in host.filter_netdevs and remaining <= 0 and state.ingress_qdisc.get(netdev) == "ingress":
-            script.qdisc_del.append(commands.qdisc_del(netdev))
+            script.qdisc_del.append(commands.qdisc_del(netdev, bindings=state.bindings))
             kept.discard(netdev)
             diff.changes.append(Change("qdisc", "remove", netdev, "ingress qdisc added by the tool"))
-    wanted_record = _record(host, plan, layout_name, marker, sorted(kept))
+    wanted_record = None
+    if policy.persist_record:
+        assert plan is not None
+        wanted_record = _record(host, plan, layout_name, marker, sorted(kept))
     if state.record != wanted_record:
-        script.record.extend(commands.record_write(wanted_record))
-        before = (f"group {state.record.get('group')}, plan {state.record.get('plan')}" if state.record
-                  else "none")
-        diff.changes.append(Change("record", "write", commands.RECORD_PATH,
-                                   f"{before} -> group {plan.group.label}, layout {layout_name}, plan {plan.digest}"))
+        if wanted_record is None:
+            script.record.append(commands.record_remove())
+            diff.changes.append(Change("record", "remove", commands.RECORD_PATH, f"group {group}"))
+        else:
+            script.record.extend(commands.record_write(wanted_record))
+            before = f"group {state.record.get('group')}" if state.record else "none"
+            diff.changes.append(Change("record", "write", commands.RECORD_PATH,
+                                       f"{before} -> group {group}, layout {layout_name}, plan {plan.digest}"))
     for entry in state.foreign_tag_filters():
         diff.notes.append(f"a filter outside the reserved preferences matches relay tag 0x{entry.protocol:04x}: "
                           f"{entry.text()}")
-    _adopt_blocker(diff, adopt)
-    diff.commands = script.lines(host.name) if diff.pending else []
+    if policy.require_adoption:
+        _adopt_blocker(diff, adopt)
+    diff.commands = script.lines(host.name, check_hostname=check_hostname) if diff.pending else []
     return diff
 
 
 def compare_down(state: HostState, *, group: str, marker: commands.MarkerConfig, adopt: bool,
                  check_hostname: bool = True) -> HostDiff:
     """What ``remove`` deletes from one host: every object the tool owns there."""
-    diff = HostDiff(state.position, state.name, group, "down")
-    if _common_blockers(diff, state, check_hostname=check_hostname):
-        return diff
-    script = _Script()
-    removed_filters = {netdev: 0 for netdev in model.FABRIC_NETDEVS}
-    for netdev in model.FABRIC_NETDEVS:
-        present: dict[int, list[FilterEntry]] = {}
-        for entry in state.reserved_filters(netdev):
-            present.setdefault(entry.pref, []).append(entry)
-        for pref, entries in sorted(present.items()):
-            script.filter_del.extend(_filter_removal(entries))
-            removed_filters[netdev] += len(entries)
-            diff.changes.append(Change("filter", "remove", f"{netdev} pref {pref}",
-                                       "; ".join(entry.text() for entry in entries)))
-    for entry in state.relay_routes():
-        script.route_del.append(_route_removal(entry))
-        diff.changes.append(Change("route", "remove", f"{entry.destination}/32", entry.text(), not entry.owned))
-    for entry in state.relay_neighbours():
-        script.neigh_del.append(commands.neigh_del(entry.destination, entry.dev))
-        diff.changes.append(Change("neighbour", "remove", f"{entry.destination} dev {entry.dev}", entry.text(),
-                                   not entry.owned))
-    _marker_changes(diff, script, state, None, marker)
-    recorded = set(state.record.get("qdiscs", [])) if state.record else set()
-    for netdev in sorted(recorded):
-        remaining = len(state.filters.get(netdev, [])) - removed_filters.get(netdev, 0)
-        if remaining <= 0 and state.ingress_qdisc.get(netdev) == "ingress":
-            script.qdisc_del.append(commands.qdisc_del(netdev))
-            diff.changes.append(Change("qdisc", "remove", netdev, "ingress qdisc added by the tool"))
-    if state.record is not None:
-        script.record.append(commands.record_remove())
-        diff.changes.append(Change("record", "remove", commands.RECORD_PATH,
-                                   f"group {state.record.get('group')}, plan {state.record.get('plan')}"))
-    _adopt_blocker(diff, adopt)
-    diff.commands = script.lines(state.name) if diff.pending else []
-    return diff
+    desired = HostPlan(state.position, state.name, group, (), (), state.bindings)
+    return _reconcile(state, desired, None, layout_name="", marker=marker, adopt=adopt,
+                      check_hostname=check_hostname, policy=REMOVE, group=group)
 
 
 def compare_boot(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name: str,
-                 marker: commands.MarkerConfig, adopt: bool = False,
-                 check_hostname: bool = True) -> HostDiff:
-    """What ``apply --boot`` installs on one host: the parts of the plan that are missing.
-
-    Restore missing state: add every missing
-    object, replace a differing object in place at its own reserved
-    preference, protocol or destination, restart markers whose rules differ or
-    that are gone, rewrite the record; remove nothing. ``adopt`` is accepted
-    for one signature with ``compare_up``; boot restore never removes, so
-    unowned objects are only ever marked in place at their own destination.
-    """
-    diff = HostDiff(host.position, host.name, plan.group.label, "boot")
-    if _common_blockers(diff, state, check_hostname=True):
-        return diff
-    script = _Script()
-    if state.record is not None and state.record.get("group") != plan.group.label:
-        # compare_boot keeps another group's record alone; --boot only ever restores its own group.
-        return diff
-    for netdev in model.FABRIC_NETDEVS:
-        planned = {relay_filter.pref: relay_filter for relay_filter in host.filters
-                   if relay_filter.in_netdev == netdev}
-        if planned and state.ingress_qdisc.get(netdev) is None:
-            script.qdisc_add.append(commands.qdisc_add(netdev))
-            diff.changes.append(Change("qdisc", "add", netdev, "ingress"))
-        present: dict[int, list[FilterEntry]] = {}
-        for entry in state.reserved_filters(netdev):
-            present.setdefault(entry.pref, []).append(entry)
-        for pref, relay_filter in sorted(planned.items()):
-            entries = present.get(pref, [])
-            wanted = (f"0x{relay_filter.protocol:04x} -> 0x{relay_filter.new_type:04x}, dst "
-                      f"{relay_filter.next_mac}, out {relay_filter.out_netdev}")
-            if len(entries) == 1 and entries[0].matches(relay_filter):
-                diff.changes.append(Change("filter", "keep", f"{netdev} pref {pref}", wanted))
-                continue
-            if entries:
-                # The preference is the tool's; one wrong filter there is replaced, not left.
-                script.filter_del.extend(_filter_removal(entries))
-            script.filter_add.append(commands.filter_add(relay_filter))
-            before = "; ".join(entry.text() for entry in entries)
-            diff.changes.append(Change("filter", "replace" if entries else "add", f"{netdev} pref {pref}",
-                                       f"{before} -> {wanted}" if entries else wanted))
-    for route in host.routes:
-        entries = [entry for entry in state.routes if entry.prefixlen == 32
-                   and entry.destination == route.destination]
-        equal = next((entry for entry in entries if _route_equal(entry, route.destination, route.netdev,
-                                                                route.source)), None)
-        if equal is not None and equal.owned:
-            diff.changes.append(Change("route", "keep", f"{route.destination}/32",
-                                       f"dev {route.netdev} src {route.source}"))
-            continue
-        if entries and not all(entry.owned or state.is_relay_route(entry) for entry in entries):
-            diff.notes.append(f"route {route.destination}/32 is held by a route that is not a relay route; "
-                              "boot restore leaves it alone")
-            continue
-        script.route_set.append(commands.route_replace(route.destination, route.netdev, route.source))
-        before = "; ".join(entry.text() for entry in entries)
-        diff.changes.append(Change("route", "replace" if entries else "add", f"{route.destination}/32",
-                                   f"{before} -> dev {route.netdev} src {route.source}" if entries else
-                                   f"dev {route.netdev} src {route.source}"))
-    for route in host.routes:
-        neighbours = [entry for entry in state.relay_neighbours()
-                      if (entry.destination, entry.dev) == (route.destination, route.netdev)]
-        if len(neighbours) == 1 and neighbours[0].mac == route.next_mac.lower():
-            action = "keep" if neighbours[0].owned else "mark"
-            diff.changes.append(Change("neighbour", action, f"{route.destination} dev {route.netdev}",
-                                       route.next_mac, not neighbours[0].owned))
-            if action == "mark":
-                script.neigh_set.append(commands.neigh_replace(route.destination, route.next_mac, route.netdev))
-            continue
-        script.neigh_set.append(commands.neigh_replace(route.destination, route.next_mac, route.netdev))
-        before = "; ".join(entry.text() for entry in neighbours)
-        diff.changes.append(Change("neighbour", "replace" if neighbours else "add",
-                                   f"{route.destination} dev {route.netdev}",
-                                   f"{before} -> {route.next_mac}" if neighbours else route.next_mac))
-    _marker_changes(diff, script, state, host, marker)
-    recorded = set(state.record.get("qdiscs", [])) if state.record else set()
-    wanted_record = _record(host, plan, layout_name, marker,
-                            sorted(recorded | {netdev for netdev in host.filter_netdevs}))
-    if state.record != wanted_record:
-        script.record.extend(commands.record_write(wanted_record))
-        before = (f"group {state.record.get('group')}, plan {state.record.get('plan')}" if state.record
-                  else "none")
-        diff.changes.append(Change("record", "write", commands.RECORD_PATH,
-                                   f"{before} -> group {plan.group.label}, layout {layout_name}, "
-                                   f"plan {plan.digest}"))
-    diff.commands = script.lines(host.name) if diff.pending else []
-    return diff
+                 marker: commands.MarkerConfig, adopt: bool, check_hostname: bool = True) -> HostDiff:
+    """Restore desired objects while retaining stale and foreign resources."""
+    return _reconcile(state, host, plan, layout_name=layout_name, marker=marker,
+                      adopt=adopt, check_hostname=check_hostname, policy=RESTORE, group=plan.group.label)

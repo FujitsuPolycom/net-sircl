@@ -13,8 +13,8 @@ gives them:
     port 1 secondary  roceP2p1s0f1   enP2p1s0f1np1
 
 A topology file may name other functions (``port0 <fn> <fn>``,
-``port1 <fn> <fn>``); the tool sets the role table from it once, before any
-planning (:func:`set_roles`), and every module reads the table at call time.
+``port1 <fn> <fn>``); an immutable role table follows the topology and its resolved facts through
+planning, observation and command generation.
 A cable joins one port of one Spark to one port of another and carries two
 links (the primary functions of its ends and the secondary functions). A
 fabric is the set of cables a group owns, written
@@ -63,49 +63,66 @@ DEFAULT_ROLES = (
     Role("ccw_secondary", "roceP2p1s0f1", "enP2p1s0f1np1", 1, True),
 )
 
-# The role table this process plans with: set once from the topology file
-# (:func:`set_roles`) before any planning or command generation.
-ROLES: tuple[Role, ...] = DEFAULT_ROLES
-FABRIC_NETDEVS: tuple[str, ...] = tuple(role.netdev for role in ROLES)
-RDMA_DEVICES: tuple[str, ...] = tuple(role.device for role in ROLES)
+@dataclasses.dataclass(frozen=True)
+class FabricBindings:
+    """Four validated RDMA functions and their Ethernet interfaces for one operation."""
+
+    roles: tuple[Role, ...] = DEFAULT_ROLES
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "roles", tuple(self.roles))
+        if len(self.roles) != 4:
+            raise FabricError("a role table holds four functions")
+        for role in self.roles:
+            device_name(role.device)
+            device_name(role.netdev)
+        if len(set(self.devices)) != 4 or len(set(self.netdevs)) != 4:
+            raise FabricError("a role table names one device or interface for two functions")
+        if sorted((r.port, r.secondary) for r in self.roles) != [(0, False), (0, True), (1, False), (1, True)]:
+            raise FabricError("a role table needs both function classes of each port")
+
+    @property
+    def devices(self) -> tuple[str, ...]:
+        return tuple(role.device for role in self.roles)
+
+    @property
+    def netdevs(self) -> tuple[str, ...]:
+        return tuple(role.netdev for role in self.roles)
+
+    def role_at(self, port: int, secondary: bool) -> Role:
+        return next(role for role in self.roles if (role.port, role.secondary) == (port, secondary))
+
+    def role_of(self, device: str) -> Role | None:
+        return next((role for role in self.roles if role.device == device), None)
+
+    def role_of_netdev(self, netdev: str) -> Role:
+        for role in self.roles:
+            if role.netdev == netdev:
+                return role
+        raise FabricError(f"{netdev!r} is not a fabric network device")
 
 
-def set_roles(roles: Sequence[Role]) -> None:
-    """Install ``roles`` as this process's role table (the four functions, port 0 and 1, both classes)."""
-    global ROLES, FABRIC_NETDEVS, RDMA_DEVICES
-    roles = tuple(roles)
-    if len(roles) != 4:
-        raise FabricError(f"a role table holds four functions, got {len(roles)}")
-    if len({role.device for role in roles}) != 4 or len({role.netdev for role in roles}) != 4:
-        raise FabricError("a role table names one device or interface for two functions")
-    if sorted((role.port, role.secondary) for role in roles) != [(0, False), (0, True), (1, False), (1, True)]:
-        raise FabricError("a role table needs the primary and the secondary function of each port")
-    ROLES = roles
-    FABRIC_NETDEVS = tuple(role.netdev for role in ROLES)
-    RDMA_DEVICES = tuple(role.device for role in ROLES)
+def device_name(value: str) -> str:
+    """Device identifiers are data, with no shell syntax or path components."""
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,62}", value):
+        raise FabricError(f"invalid device identifier {value!r}")
+    return value
+
+
+DEFAULT_BINDINGS = FabricBindings()
+# Immutable defaults for callers constructing the standard DGX Spark layout.
+ROLES = DEFAULT_BINDINGS.roles
+FABRIC_NETDEVS = DEFAULT_BINDINGS.netdevs
+RDMA_DEVICES = DEFAULT_BINDINGS.devices
 
 
 def role_at(port: int, secondary: bool) -> Role:
-    for role in ROLES:
-        if role.port == port and role.secondary == secondary:
-            return role
-    raise FabricError(f"no function on port {port}")
-
-
-def role_of(device: str) -> Role | None:
-    """The role of an RDMA device name, or None."""
-    for role in ROLES:
-        if role.device == device:
-            return role
-    return None
+    return DEFAULT_BINDINGS.role_at(port, secondary)
 
 
 def role_of_netdev(netdev: str) -> Role:
-    """The role of a network device name; FabricError for a device outside the fabric."""
-    for role in ROLES:
-        if role.netdev == netdev:
-            return role
-    raise FabricError(f"{netdev} is not one of the fabric network devices {', '.join(FABRIC_NETDEVS)}")
+    return DEFAULT_BINDINGS.role_of_netdev(netdev)
+
 
 
 def class_name(secondary: bool) -> str:
@@ -337,7 +354,7 @@ class LaneRoute:
         }
 
 
-def derive_lanes(fabric: Fabric, a: int, b: int, lanes: int = 2) -> tuple[LaneRoute, ...]:
+def derive_lanes(fabric: Fabric, a: int, b: int, lanes: int = 2, *, bindings: FabricBindings = DEFAULT_BINDINGS) -> tuple[LaneRoute, ...]:
     """The lanes from position ``a`` to position ``b``.
 
     The shortest paths of the fabric (one, or two when the two ends are
@@ -375,8 +392,8 @@ def derive_lanes(fabric: Fabric, a: int, b: int, lanes: int = 2) -> tuple[LaneRo
     for lane in range(lanes):
         path = chosen[lane]
         secondary = lane == 1
-        result.append(LaneRoute(lane, role_at(path[0].src_port, secondary),
-                                role_at(path[-1].dst_port, secondary), path))
+        result.append(LaneRoute(lane, bindings.role_at(path[0].src_port, secondary),
+                                bindings.role_at(path[-1].dst_port, secondary), path))
     return tuple(result)
 
 
@@ -408,11 +425,11 @@ class GroupRoutes:
                    default=0)
 
 
-def derive_routes(layout: Layout, lanes: int = 2) -> GroupRoutes:
+def derive_routes(layout: Layout, lanes: int = 2, *, bindings: FabricBindings = DEFAULT_BINDINGS) -> GroupRoutes:
     """Route maps of every rank of a session on ``layout``."""
     ranks = []
     for rank, here in enumerate(layout.positions):
-        ranks.append({peer: derive_lanes(layout.fabric, here, there, lanes)
+        ranks.append({peer: derive_lanes(layout.fabric, here, there, lanes, bindings=bindings)
                       for peer, there in enumerate(layout.positions) if peer != rank})
     return GroupRoutes(layout, lanes, tuple(ranks))
 
@@ -440,8 +457,9 @@ def relay_load(routes: GroupRoutes) -> tuple[int, float]:
     return busiest, busiest / routes.lanes
 
 
-def _lane_steps(layout: Layout, rank: int, peer: int, device: str) -> tuple[Role, tuple[Step, ...]] | None:
-    role = role_of(device)
+def _lane_steps(layout: Layout, rank: int, peer: int, device: str,
+                bindings: FabricBindings) -> tuple[Role, tuple[Step, ...]] | None:
+    role = bindings.role_of(device)
     if role is None:
         return None
     steps = layout.fabric.walk(layout.positions[rank], role.port, layout.positions[peer],
@@ -450,7 +468,8 @@ def _lane_steps(layout: Layout, rank: int, peer: int, device: str) -> tuple[Role
 
 
 def relay_queues(layout: Layout,
-                 route_maps: Sequence[Mapping[int, Sequence[str]]]) -> dict[tuple[int, bool, int],
+                 route_maps: Sequence[Mapping[int, Sequence[str]]], *,
+                 bindings: FabricBindings = DEFAULT_BINDINGS) -> dict[tuple[int, bool, int],
                                                                            list[tuple[int, int, int]]]:
     """Lanes through every relay hairpin queue of a group.
 
@@ -461,7 +480,7 @@ def relay_queues(layout: Layout,
     for rank, routes in enumerate(route_maps):
         for peer, devices in sorted(routes.items()):
             for lane, device in enumerate(devices):
-                found = _lane_steps(layout, rank, peer, device)
+                found = _lane_steps(layout, rank, peer, device, bindings)
                 if found is None:
                     continue
                 role, steps = found

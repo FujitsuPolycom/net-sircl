@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 class ReleaseTests(unittest.TestCase):
     def test_release_transport_source_bytes_match_manifest(self):
         manifest = json.loads((ROOT / "SOURCE.json").read_text())
+        excluded = {".git", "build", ".core-build", "dist", "test-results", ".codegraph"}
+        sources = {path.relative_to(ROOT).as_posix() for path in ROOT.rglob("*")
+                   if path.is_file() and path.suffix in {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp"}
+                   and not set(path.relative_to(ROOT).parts) & excluded}
+        self.assertEqual(set(manifest["source_sha256"]), sources)
         for name, expected in manifest["source_sha256"].items():
             with self.subTest(path=name):
                 self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), expected)
@@ -43,7 +48,8 @@ class ReleaseTests(unittest.TestCase):
                                  "net-sircl/net_sircl_tuner.h", "net-sircl/nccl/tuner_v4.h",
                                  "examples/torch_teardown.py", "scripts/check_teardown.py",
                                  "scripts/check_channels.py", "scripts/check_compat.py",
-                                 "net-sircl/PROFILING.md", "net-sircl/net_sircl_routes.h",
+                                 "net-sircl/PROFILING.md", "net-sircl/net_sircl_plan.h",
+                                 "net-sircl/net_sircl_plan.c", "net-sircl/net_sircl_admission.h",
                                  "net-sircl/net_sircl_profile.h", "net-sircl/net_sircl_compat.h",
                                  "fabric-tool/LICENSE", "fabric-tool/NOTICE", "fabric-tool/VERSION",
                                  "fabric-tool/mesh_marker.c", "fabric-tool/fabric_tool/cli.py",
@@ -63,7 +69,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(ctypes.c_char_p(ctypes.addressof(
             ctypes.c_char.in_dll(library, "net_sircl_release"))).value.decode(), version)
         identity = subprocess.check_output([sys.executable, str(ROOT / "transport-core/tools/identity.py")]).strip()
-        self.assertIn(identity, (ROOT / "net-sircl/libnccl-net-sircl-emu.so").read_bytes())
+        self.assertTrue(identity in (ROOT / "net-sircl/libnccl-net-sircl-emu.so").read_bytes(),
+                        "compiled emulator lacks the expected transport source identity; rebuild it from this source tree")
 
     def test_all_example_routes_parse(self):
         subprocess.run(["make", "-C", str(ROOT / "net-sircl"), "emu"], check=True)

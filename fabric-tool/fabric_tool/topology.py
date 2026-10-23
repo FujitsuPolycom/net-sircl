@@ -17,8 +17,7 @@ accepts the same keys and defaults:
   512 KiB hairpin queue);
 - ``net-sircl-topology``: the file's optional first key, as the plugin reads it.
 
-:func:`load` parses a file, installs the role table it names
-(:func:`fabric_tool.model.set_roles`) and returns the :class:`Topology`. Its
+:func:`load` returns a validated :class:`Topology` with immutable device bindings. Its
 :attr:`Topology.group` is the one group the tool plans: the fabric of the
 topology's cables over positions 0..N-1, whole cycle or path, with the
 relay-egress default (``same`` for a whole cycle,
@@ -53,6 +52,7 @@ class GroupSpec:
     layout: Layout
     relay_egress: str
     name: str = "topology"
+    bindings: model.FabricBindings = model.DEFAULT_BINDINGS
 
     @property
     def members(self) -> tuple[int, ...]:
@@ -120,6 +120,10 @@ class Topology:
     budget: int
 
     @property
+    def bindings(self) -> model.FabricBindings:
+        return model.FabricBindings(_roles_of_functions(self.functions))
+
+    @property
     def size(self) -> int:
         return len(self.hosts)
 
@@ -177,6 +181,8 @@ def parse(text: str, *, path: str = "<topology>") -> Topology:
             except FabricError:
                 raise FabricError(f"{path}:{lineno}: a cable is `cable <i>.port<0|1> <j>.port<0|1>`") from None
         elif key in ("port0", "port1"):
+            if len(rest) != 2:
+                raise FabricError(f"{path}:{lineno}: {key} requires exactly two device identifiers")
             port = int(key[-1])
             for lane, name in enumerate(rest[:2]):
                 functions[2 * port + lane] = name
@@ -214,6 +220,7 @@ def parse(text: str, *, path: str = "<topology>") -> Topology:
     if fabric.kind != "cycle" and not _is_connected_path(fabric):
         raise FabricError(f"{path}: the cables do not join the hosts into one path or cycle")
     topology = Topology(path, tuple(hosts), cabling, tuple(fabric.cables), tuple(functions), budget)
+    topology.bindings  # Validate identifiers before any host operation.
     return topology
 
 
@@ -235,16 +242,16 @@ def _group_of(topology: Topology) -> GroupSpec:
     fabric = Fabric(topology.cables)
     layout = Layout(fabric, tuple(range(topology.size)))
     egress = "same" if fabric.kind == "cycle" else "sibling"
-    return GroupSpec(layout, egress, f"topology:{Path(topology.path).name}")
+    return GroupSpec(layout, egress, f"topology:{Path(topology.path).name}", topology.bindings)
 
 
 def load(path: str | Path) -> Topology:
-    """Read, parse and install the role table of a topology file."""
+    """Read and validate a topology file without changing process state."""
     file = Path(path)
     try:
         text = file.read_text(encoding="utf-8")
     except OSError as error:
         raise FabricError(f"cannot read the topology file {file}: {error}") from None
     topology = parse(text, path=str(file))
-    model.set_roles(_roles_of_functions(topology.functions))
+    topology.bindings  # Validate identifiers before any host operation.
     return topology

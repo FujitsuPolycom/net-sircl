@@ -37,7 +37,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import boot, commands, facts as facts_mod, model, ops, report, topology as topology_mod
+from . import boot, commands, diff as diff_mod, facts as facts_mod, model, ops, report, topology as topology_mod
 from .model import FabricError
 from .plan import Facts, build_plan, render_text
 
@@ -71,18 +71,12 @@ def _install_scripts(plan, marker: commands.MarkerConfig) -> dict[int, str]:
     """The from-nothing install script of every host (what ``apply`` converges to on an empty host)."""
     scripts = {}
     for host in plan.hosts:
-        lines = [commands.HEADER, commands.guard(host.name)]
-        for netdev in host.filter_netdevs:
-            lines.append(commands.qdisc_add(netdev))
-        lines.extend(commands.filter_add(relay_filter) for relay_filter in host.filters)
-        lines.extend(commands.neigh_replace(route.destination, route.next_mac, route.netdev)
-                     for route in host.routes)
-        lines.extend(commands.route_replace(route.destination, route.netdev, route.source)
-                     for route in host.routes)
-        for rules in host.markers:
-            lines.extend(commands.marker_start(marker, rules.device, rules.rules))
-        lines.append(commands.SETTLE)
-        scripts[host.position] = "\n".join(lines) + "\n"
+        observed = ops.state_mod.HostState(host.position, host.name, "", True,
+                                           hostname=host.name, bindings=host.bindings)
+        result = diff_mod.compare_up(observed, host, plan, layout_name=plan.group.name,
+                                     marker=marker, adopt=False)
+        if result.script:
+            scripts[host.position] = result.script
     return scripts
 
 
@@ -141,7 +135,7 @@ def _command_plan(args: argparse.Namespace) -> int:
     if args.facts:
         facts = facts_mod.bind(facts_mod.load(args.facts), topology)
     else:
-        facts = Facts.symbolic_for(topology.hosts)
+        facts = Facts.symbolic_for(topology.hosts, bindings=topology.bindings)
     plan = build_plan(topology.group, facts, max_relays=args.max_relays)
     if args.json:
         print(json.dumps({"schema": "fabric-tool-plan/v2", "topology": args.topology,
@@ -163,7 +157,7 @@ def _command_facts(args: argparse.Namespace, topology: topology_mod.Topology,
                    executor: ops.Executor) -> int:
     hosts = _resolve_hosts(topology, args)
     marker = commands.MarkerConfig(args.marker)
-    states = ops.gather(hosts, sorted(hosts), executor, marker)
+    states = ops.gather(hosts, sorted(hosts), executor, marker, bindings=topology.bindings)
     document = facts_mod.from_states(states, topology)
     text = json.dumps(document, indent=1)
     if args.output:
@@ -182,8 +176,9 @@ def _apply_flow(args: argparse.Namespace, topology: topology_mod.Topology, mode:
     hosts = _resolve_hosts(topology, args)
     marker = commands.MarkerConfig(args.marker)
     positions = sorted(hosts)
-    states = ops.gather(hosts, positions, executor, marker)
     file_facts = _file_facts(args, topology)
+    bindings = file_facts.bindings if file_facts else topology.bindings
+    states = ops.gather(hosts, positions, executor, marker, bindings=bindings)
     outcome = ops.evaluate(topology, states, file_facts, mode=mode, marker=marker, adopt=args.adopt,
                            check_hostname=not args.skip_hostname_check, max_relays=args.max_relays,
                            positions=positions)
@@ -206,7 +201,7 @@ def _apply_flow(args: argparse.Namespace, topology: topology_mod.Topology, mode:
         text = (result.stdout + result.stderr).strip()
         print(f"{hosts[position].name}: exit {result.returncode}" + (f": {text[-1500:]}" if text else ""))
         failed |= not result.ok
-    states = ops.gather(hosts, positions, executor, marker)
+    states = ops.gather(hosts, positions, executor, marker, bindings=bindings)
     verify = ops.evaluate(topology, states, file_facts, mode=mode, marker=marker, adopt=args.adopt,
                           check_hostname=not args.skip_hostname_check, max_relays=args.max_relays,
                           positions=positions)
@@ -227,8 +222,10 @@ def _command_verify(args: argparse.Namespace, topology: topology_mod.Topology,
                     executor: ops.Executor) -> int:
     hosts = _resolve_hosts(topology, args)
     marker = commands.MarkerConfig(args.marker)
-    states = ops.gather(hosts, sorted(hosts), executor, marker)
-    outcome = ops.evaluate(topology, states, _file_facts(args, topology), mode="up", marker=marker,
+    file_facts = _file_facts(args, topology)
+    states = ops.gather(hosts, sorted(hosts), executor, marker,
+                        bindings=file_facts.bindings if file_facts else topology.bindings)
+    outcome = ops.evaluate(topology, states, file_facts, mode="up", marker=marker,
                            adopt=False, check_hostname=not args.skip_hostname_check,
                            max_relays=args.max_relays, positions=sorted(hosts))
     _print_outcome(outcome, args, scripts=args.scripts)
@@ -243,7 +240,7 @@ def _command_status(args: argparse.Namespace, topology: topology_mod.Topology,
                     executor: ops.Executor) -> int:
     hosts = _resolve_hosts(topology, args)
     marker = commands.MarkerConfig(args.marker)
-    states = ops.gather(hosts, sorted(hosts), executor, marker)
+    states = ops.gather(hosts, sorted(hosts), executor, marker, bindings=topology.bindings)
     print(report.render_show(states, marker))
     return 0 if all(state.reachable for state in states.values()) else 1
 
@@ -252,7 +249,7 @@ def _command_marker(args: argparse.Namespace, topology: topology_mod.Topology,
                     executor: ops.Executor) -> int:
     hosts = _resolve_hosts(topology, args)
     marker = commands.MarkerConfig(args.marker)
-    states = ops.gather(hosts, sorted(hosts), executor, marker)
+    states = ops.gather(hosts, sorted(hosts), executor, marker, bindings=topology.bindings)
     print(_marker_status(states, marker))
     # A missing executable, or one without the digest its install recorded, is (re)built.
     targets = [p for p in sorted(hosts) if states[p].reachable
@@ -311,14 +308,16 @@ def _command_install_boot(args: argparse.Namespace, topology: topology_mod.Topol
     if file_facts is None or file_facts.symbolic:
         raise FabricError("install-boot needs a complete facts file (--facts); placeholders are not installable")
     build_plan(topology.group, file_facts, max_relays=args.max_relays)  # refuses a plan that cannot be built
-    spec = boot.plan(args.topology, args.facts[0], tool=args.tool)
-    # Persist all facts, including hosts supplied by additional --facts files.
-    merged = json.dumps(facts_mod.load(args.facts), indent=1) + "\n"
-    spec = boot.BootPlan(spec.topology_path, spec.facts_path, spec.unit,
-                         tuple((name, merged if name == boot.FACTS_INPUT else content)
-                               for name, content in spec.files))
+    restore = boot.RestoreInvocation(tool=args.tool, marker=args.marker, max_relays=args.max_relays,
+                                     host=args.host, skip_hostname_check=args.skip_hostname_check)
+    spec = boot.plan(args.topology, args.facts[0], invocation=restore,
+                     topology_text=Path(args.topology).read_text(encoding="utf-8"),
+                     facts_text=json.dumps(facts_mod.load(args.facts), indent=1) + "\n")
     print(f"unit {boot.UNIT_NAME}:")
     print(spec.files[2][1], end="")
+    for destination, content in spec.files[3:]:
+        print(f"unit {destination}:")
+        print(content, end="")
     for destination, _ in spec.files[:2]:
         print(f"input: {destination}")
     if not args.execute:
@@ -328,7 +327,7 @@ def _command_install_boot(args: argparse.Namespace, topology: topology_mod.Topol
     # Reject identity/ownership/facts blockers before persisting a boot service.
     hosts = _resolve_hosts(topology, args)
     marker = commands.MarkerConfig(args.marker)
-    states = ops.gather(hosts, sorted(hosts), executor, marker)
+    states = ops.gather(hosts, sorted(hosts), executor, marker, bindings=file_facts.bindings)
     outcome = ops.evaluate(topology, states, file_facts, mode="boot", marker=marker,
                            adopt=False, check_hostname=not args.skip_hostname_check,
                            max_relays=args.max_relays, positions=sorted(hosts))
@@ -336,6 +335,8 @@ def _command_install_boot(args: argparse.Namespace, topology: topology_mod.Topol
         _print_outcome(outcome, args, scripts=False)
         return 3
     if args.root == "/":
+        if Path(f"/etc/systemd/system/{boot.RECOVERY_TIMER}").exists():
+            boot.stop_reconciliation()
         source = Path(__file__).resolve().parents[1]
         target = Path(boot.LIB_DIR)
         if target.resolve() != source.resolve():
@@ -346,12 +347,17 @@ def _command_install_boot(args: argparse.Namespace, topology: topology_mod.Topol
         wrapper.chmod(0o755)
         print(f"wrote {wrapper}")
     boot.install(spec, root=args.root, execute=True)
-    print(f"enabled {boot.UNIT_NAME}")
-    return _apply_flow(args, topology, "boot", executor)
+    print(f"enabled {boot.UNIT_NAME} and {boot.RECOVERY_TIMER}")
+    code = _apply_flow(args, topology, "boot", executor)
+    if code == 0 and args.root == "/":
+        subprocess.run(["systemctl", "start", boot.RECOVERY_TIMER], check=True)
+    return code
 
 
 def _command_remove_boot(args: argparse.Namespace) -> int:
-    removed = [f"/etc/systemd/system/{boot.UNIT_NAME}", boot.TOPOLOGY_INPUT, boot.FACTS_INPUT]
+    removed = [f"/etc/systemd/system/{name}" for name in
+               (boot.UNIT_NAME, boot.RECOVERY_SERVICE, boot.RECOVERY_TIMER)]
+    removed += [boot.TOPOLOGY_INPUT, boot.FACTS_INPUT]
     print("remove-boot deletes: " + ", ".join(removed) + "; the relay table itself stays until `remove`")
     if not args.execute:
         print("dry run: --execute removes them")

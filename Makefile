@@ -33,6 +33,8 @@ install:
 	install -m 0644 SOURCE.json $(DESTDIR)$(PREFIX)/share/doc/net-sircl/SOURCE.json
 	install -d $(DESTDIR)$(PREFIX)/share/doc/net-sircl/docs $(DESTDIR)$(PREFIX)/share/net-sircl/examples
 	install -m 0644 docs/*.md $(DESTDIR)$(PREFIX)/share/doc/net-sircl/docs/
+	install -d $(DESTDIR)$(PREFIX)/share/doc/net-sircl/docs/evidence
+	install -m 0644 docs/evidence/*.json $(DESTDIR)$(PREFIX)/share/doc/net-sircl/docs/evidence/
 	install -m 0644 examples/* $(DESTDIR)$(PREFIX)/share/net-sircl/examples/
 	install -d $(DESTDIR)$(PREFIX)/share/doc/net-sircl/examples
 	install -m 0644 examples/* $(DESTDIR)$(PREFIX)/share/doc/net-sircl/examples/

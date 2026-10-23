@@ -170,39 +170,39 @@ def _mac(value: str) -> str:
     return value.lower()
 
 
-def _netdev(value: str) -> str:
-    if value not in model.FABRIC_NETDEVS:
+def _netdev(value: str, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
+    if value not in bindings.netdevs:
         raise FabricError(f"{value!r} is not a fabric network device")
-    return value
+    return q(model.device_name(value))
 
 
-def _device(value: str) -> str:
-    if value not in model.RDMA_DEVICES:
+def _device(value: str, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
+    if value not in bindings.devices:
         raise FabricError(f"{value!r} is not a fabric RDMA device")
-    return value
+    return q(model.device_name(value))
 
 
 # -- read script ---------------------------------------------------------------------------
 
 
-def read_script(marker: MarkerConfig) -> str:
+def read_script(marker: MarkerConfig, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
     """Read-only facts and relay objects of one host, as ``@@<section>`` blocks."""
     lines = ["set -u"]
 
     def section(name: str, *commands: str) -> None:
-        lines.append(f"echo {SECTION}{name}")
+        lines.append(f"echo {q(SECTION + name)}")
         lines.extend(commands)
         lines.append(SECTION_END)
 
     section("hostname", "hostname")
     section("versions", "ip -V 2>&1 || true", "tc -V 2>&1 || true")
     section("links", "ip -j addr show")
-    for device in model.RDMA_DEVICES:
-        section(f"rdma:{device}", f"ls /sys/class/infiniband/{device}/device/net 2>/dev/null || true")
+    for device in bindings.devices:
+        section(f"rdma:{device}", f"ls /sys/class/infiniband/{q(device)}/device/net 2>/dev/null || true")
     section("routes", "ip -j -d route show table main")
     section("neighbours", "ip -j neigh show nud permanent")
-    for netdev in model.FABRIC_NETDEVS:
-        section(f"qdisc:{netdev}", f"tc -j qdisc show dev {netdev} 2>/dev/null || true")
+    for netdev in bindings.netdevs:
+        section(f"qdisc:{netdev}", f"tc -j qdisc show dev {q(netdev)} 2>/dev/null || true")
         section(f"filters:{netdev}", f"tc -j filter show dev {netdev} ingress 2>/dev/null || true")
     section("markers", f"pgrep -a -x {q(marker.comm)} || true")
     section("marker-binary", f"sha256sum {q(marker.path)} 2>/dev/null || true")
@@ -210,7 +210,7 @@ def read_script(marker: MarkerConfig) -> str:
     section("marker-owners", f"stat -c '%U %a %n' -- {' '.join(q(p) for p in marker.checked_paths)} "
                              f"{' '.join(q(p) for p in marker.log_dirs if p not in marker.checked_paths)} "
                              "2>/dev/null || true")
-    for device in model.RDMA_DEVICES:
+    for device in bindings.devices:
         section(f"marker-log:{device}", f"head -c 4096 {q(marker.log(device))} 2>/dev/null || true")
     section("record", f"cat {RECORD_PATH} 2>/dev/null || true")
     section("sparkring-record", f"cat {SPARKRING_RECORD_PATH} 2>/dev/null || true")
@@ -242,47 +242,47 @@ def guard(hostname: str) -> str:
             f'{{ echo {q("refusing: this host is not " + hostname)} >&2; exit 3; }}')
 
 
-def qdisc_add(netdev: str) -> str:
-    return f"sudo -n tc qdisc add dev {_netdev(netdev)} ingress"
+def qdisc_add(netdev: str, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
+    return f"sudo -n tc qdisc add dev {_netdev(netdev, bindings=bindings)} ingress"
 
 
-def qdisc_del(netdev: str) -> str:
-    return f"sudo -n tc qdisc del dev {_netdev(netdev)} ingress"
+def qdisc_del(netdev: str, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
+    return f"sudo -n tc qdisc del dev {_netdev(netdev, bindings=bindings)} ingress"
 
 
-def filter_add(relay_filter: RelayFilter) -> str:
-    return (f"sudo -n tc filter add dev {_netdev(relay_filter.in_netdev)} ingress protocol "
+def filter_add(relay_filter: RelayFilter, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
+    return (f"sudo -n tc filter add dev {_netdev(relay_filter.in_netdev, bindings=bindings)} ingress protocol "
             f"0x{relay_filter.protocol:04x} pref {relay_filter.pref} handle {relay_filter.handle} flower skip_sw "
             f"action pedit ex munge eth dst set {_mac(relay_filter.next_mac)} pipe "
             f"action pedit ex munge eth type set 0x{relay_filter.new_type:04x} pipe "
-            f"action mirred egress redirect dev {_netdev(relay_filter.out_netdev)}")
+            f"action mirred egress redirect dev {_netdev(relay_filter.out_netdev, bindings=bindings)}")
 
 
-def filter_del(netdev: str, pref: int, *, protocol: int | None = None, handle: int | None = None) -> str:
+def filter_del(netdev: str, pref: int, *, protocol: int | None = None, handle: int | None = None, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
     """Delete one filter (protocol and handle known) or every filter of a reserved preference."""
     if protocol is None or handle is None:
-        return f"sudo -n tc filter del dev {_netdev(netdev)} ingress pref {int(pref)}"
-    return (f"sudo -n tc filter del dev {_netdev(netdev)} ingress protocol 0x{int(protocol):04x} "
+        return f"sudo -n tc filter del dev {_netdev(netdev, bindings=bindings)} ingress pref {int(pref)}"
+    return (f"sudo -n tc filter del dev {_netdev(netdev, bindings=bindings)} ingress protocol 0x{int(protocol):04x} "
             f"pref {int(pref)} handle {int(handle)} flower")
 
 
-def neigh_replace(destination: str, mac: str, netdev: str) -> str:
-    return (f"sudo -n ip neigh replace {_ipv4(destination)} lladdr {_mac(mac)} dev {_netdev(netdev)} "
+def neigh_replace(destination: str, mac: str, netdev: str, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
+    return (f"sudo -n ip neigh replace {_ipv4(destination)} lladdr {_mac(mac)} dev {_netdev(netdev, bindings=bindings)} "
             f"nud permanent proto {ROUTE_PROTOCOL}")
 
 
-def neigh_del(destination: str, netdev: str) -> str:
-    return f"sudo -n ip neigh del {_ipv4(destination)} dev {_netdev(netdev)}"
+def neigh_del(destination: str, netdev: str, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
+    return f"sudo -n ip neigh del {_ipv4(destination)} dev {_netdev(netdev, bindings=bindings)}"
 
 
-def route_replace(destination: str, netdev: str, source: str) -> str:
-    return (f"sudo -n ip route replace {_ipv4(destination)}/32 dev {_netdev(netdev)} src {_ipv4(source)} "
+def route_replace(destination: str, netdev: str, source: str, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
+    return (f"sudo -n ip route replace {_ipv4(destination)}/32 dev {_netdev(netdev, bindings=bindings)} src {_ipv4(source)} "
             f"scope link proto {ROUTE_PROTOCOL}")
 
 
-def route_del(destination: str, netdev: str, *, protocol: int | None, metric: int = 0) -> str:
+def route_del(destination: str, netdev: str, *, protocol: int | None, metric: int = 0, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
     """Delete one /32 route; naming its protocol makes the kernel refuse any other route."""
-    command = f"sudo -n ip route del {_ipv4(destination)}/32 dev {_netdev(netdev)}"
+    command = f"sudo -n ip route del {_ipv4(destination)}/32 dev {_netdev(netdev, bindings=bindings)}"
     if protocol is not None:
         command += f" proto {int(protocol)}"
     if metric:
@@ -336,7 +336,7 @@ def marker_checks(marker: MarkerConfig, action: str = "start the marker") -> tup
 
 
 def marker_start(marker: MarkerConfig, device: str,
-                 rules: Iterable[tuple[str, int]]) -> tuple[str, str, str, str, str]:
+                 rules: Iterable[tuple[str, int]], *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> tuple[str, str, str, str, str]:
     """The log directory (:func:`log_dir_setup`), the checks of :func:`marker_checks`, then one managed
     marker started as root in its own session.
 
@@ -353,7 +353,7 @@ def marker_start(marker: MarkerConfig, device: str,
         raise FabricError(f"a marker for {device} needs at least one rule")
     return (*log_dir_setup(marker), *marker_checks(marker),
             f"sudo -n setsid -f bash -c {q(MARKER_LAUNCH)} {q(marker.log(device))} {q(marker.path)} "
-            f"--device {_device(device)} {rule_words} --managed < /dev/null")
+            f"--device {_device(device, bindings=bindings)} {rule_words} --managed < /dev/null")
 
 
 def marker_stop(marker: MarkerConfig, pid: int) -> tuple[str, str]:

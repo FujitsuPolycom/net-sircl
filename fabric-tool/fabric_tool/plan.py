@@ -142,7 +142,8 @@ class HostFacts:
 class Facts:
     """Addresses and MACs of the fabric functions of the hosts a plan uses."""
 
-    def __init__(self, hosts: Iterable[HostFacts], *, symbolic: bool = False) -> None:
+    def __init__(self, hosts: Iterable[HostFacts], *, symbolic: bool = False, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> None:
+        self.bindings = bindings
         self.symbolic = symbolic
         self._hosts = {host.position: host for host in hosts}
         self._addresses: dict[str, list[tuple[int, str]]] = {}
@@ -192,16 +193,17 @@ class Facts:
         return found
 
     @classmethod
-    def symbolic_for(cls, names: Sequence[str]) -> "Facts":
+    def symbolic_for(cls, names: Sequence[str], *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> "Facts":
         """Placeholders ``<name:netdev>`` and ``<name:netdev:mac>`` for every host of a layout."""
         return cls((HostFacts(position, name, tuple(Port(netdev, f"<{name}:{netdev}:mac>",
                                                     f"<{name}:{netdev}>")
-                                                    for netdev in model.FABRIC_NETDEVS))
-                    for position, name in enumerate(names)), symbolic=True)
+                                                    for netdev in bindings.netdevs))
+                    for position, name in enumerate(names)), symbolic=True, bindings=bindings)
 
 
 def port_from_text(netdev: str, mac: str, address: str, *, owner: str) -> Port:
     """A validated :class:`Port` from a MAC and ``a.b.c.d`` or ``a.b.c.d/len``."""
+    model.device_name(netdev)
     mac = mac.strip().lower()
     if not _MAC.match(mac):
         raise FabricError(f"{owner} {netdev}: {mac!r} is not a MAC address")
@@ -296,6 +298,7 @@ class HostPlan:
     group: str
     routes: tuple[OriginRoute, ...]
     filters: tuple[RelayFilter, ...]
+    bindings: model.FabricBindings = model.DEFAULT_BINDINGS
 
     @property
     def markers(self) -> tuple[MarkerRules, ...]:
@@ -303,7 +306,7 @@ class HostPlan:
         for route in self.routes:
             by_device.setdefault(route.device, []).append((route.destination, route.tag))
         return tuple(MarkerRules(device, tuple(sorted(rules, key=lambda rule: _address_key(rule[0]))))
-                     for device, rules in sorted(by_device.items(), key=lambda item: model.RDMA_DEVICES.index(item[0])))
+                     for device, rules in sorted(by_device.items(), key=lambda item: self.bindings.devices.index(item[0])))
 
     def marker(self, device: str) -> MarkerRules | None:
         for rules in self.markers:
@@ -313,7 +316,7 @@ class HostPlan:
 
     @property
     def filter_netdevs(self) -> tuple[str, ...]:
-        return tuple(netdev for netdev in model.FABRIC_NETDEVS
+        return tuple(netdev for netdev in self.bindings.netdevs
                      if any(relay_filter.in_netdev == netdev for relay_filter in self.filters))
 
     def route_to(self, destination: str) -> OriginRoute | None:
@@ -403,9 +406,9 @@ def _carry(path: tuple[model.Step, ...], secondary: bool, facts: Facts, relay_eg
            filters_at: dict[int, dict[tuple[str, int], RelayFilter]], label: str) -> None:
     hops = len(path)
     origin, target = path[0].src, path[-1].dst
-    local = model.role_at(path[0].src_port, secondary)
-    remote = model.role_at(path[-1].dst_port, secondary)
-    first = model.role_at(path[0].dst_port, secondary)
+    local = facts.bindings.role_at(path[0].src_port, secondary)
+    remote = facts.bindings.role_at(path[-1].dst_port, secondary)
+    first = facts.bindings.role_at(path[0].dst_port, secondary)
     route = OriginRoute(
         destination=facts.port(target, remote.netdev).address, netdev=local.netdev, device=local.device,
         source=facts.port(origin, local.netdev).address, next_mac=facts.port(path[0].dst, first.netdev).mac,
@@ -421,9 +424,9 @@ def _carry(path: tuple[model.Step, ...], secondary: bool, facts: Facts, relay_eg
         relay = arrive.dst
         if leave.src != relay or leave.src_port != 1 - arrive.dst_port:
             raise FabricError(f"group {label}: the path {route.cables} does not pass through host {relay}")
-        in_role = model.role_at(arrive.dst_port, secondary)
-        out_role = model.role_at(leave.src_port, secondary if relay_egress == "same" else not secondary)
-        next_role = model.role_at(leave.dst_port, secondary)
+        in_role = facts.bindings.role_at(arrive.dst_port, secondary)
+        out_role = facts.bindings.role_at(leave.src_port, secondary if relay_egress == "same" else not secondary)
+        next_role = facts.bindings.role_at(leave.dst_port, secondary)
         relay_filter = RelayFilter(
             in_netdev=in_role.netdev, k=hops - 1 - index, out_netdev=out_role.netdev,
             next_mac=facts.port(leave.dst, next_role.netdev).mac, next_position=leave.dst,
@@ -469,7 +472,7 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
                         "--max-relays raises it, research-only)")
                 for secondary in (False, True):
                     _carry(path, secondary, facts, relay_egress, routes_at, filters_at, group.label)
-    sircl = model.derive_routes(layout, 2)
+    sircl = model.derive_routes(layout, 2, bindings=facts.bindings)
     lanes_of: dict[tuple[int, str], list[str]] = {}
     for rank, peers in enumerate(sircl.ranks):
         origin = layout.positions[rank]
@@ -487,12 +490,12 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
     hosts = []
     for position in group.order:
         planned = sorted(routes_at[position].values(),
-                         key=lambda r: (model.FABRIC_NETDEVS.index(r.netdev), r.hops, _address_key(r.destination)))
+                         key=lambda r: (facts.bindings.netdevs.index(r.netdev), r.hops, _address_key(r.destination)))
         planned = [dataclasses.replace(route, lanes=tuple(lanes_of.get((position, route.destination), ())))
                    for route in planned]
         filters = sorted(filters_at[position].values(),
-                         key=lambda f: (model.FABRIC_NETDEVS.index(f.in_netdev), f.k))
-        hosts.append(HostPlan(position, facts.name(position), group.label, tuple(planned), tuple(filters)))
+                         key=lambda f: (facts.bindings.netdevs.index(f.in_netdev), f.k))
+        hosts.append(HostPlan(position, facts.name(position), group.label, tuple(planned), tuple(filters), facts.bindings))
     by_position = {host.position: host for host in hosts}
     for host in hosts:
         for route in host.routes:
@@ -506,9 +509,10 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
                                   f"crosses hosts {outside} outside the group")
     maps = [sircl.route_map(rank) for rank in range(layout.world)]
     queues = []
-    for (relay, secondary, egress_port), members_of_queue in sorted(model.relay_queues(layout, maps).items()):
-        in_role = model.role_at(1 - egress_port, secondary)
-        out_role = model.role_at(egress_port, secondary if relay_egress == "same" else not secondary)
+    for (relay, secondary, egress_port), members_of_queue in sorted(
+            model.relay_queues(layout, maps, bindings=facts.bindings).items()):
+        in_role = facts.bindings.role_at(1 - egress_port, secondary)
+        out_role = facts.bindings.role_at(egress_port, secondary if relay_egress == "same" else not secondary)
         queues.append(RelayQueue(relay, in_role.netdev, out_role.netdev,
                                  tuple(f"rank {r}->{p} lane {lane}" for r, p, lane in members_of_queue)))
     busiest, load = model.relay_load(sircl)
@@ -518,7 +522,7 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
 
 def build_plan(group: GroupSpec, facts: Facts, *, max_relays: int = model.DEFAULT_MAX_RELAYS) -> GroupPlan:
     """The plan of a topology's group, checked for isolation."""
-    problems = model.isolation_problems([model.derive_routes(group.layout, 2)])
+    problems = model.isolation_problems([model.derive_routes(group.layout, 2, bindings=facts.bindings)])
     plan = build_group_plan(group, facts, relay_egress=group.relay_egress, max_relays=max_relays)
     problems += isolation_problems([plan])
     if problems:
@@ -554,10 +558,10 @@ def trace(hosts: Mapping[int, HostPlan], facts: Facts, ring_size: int, origin: i
     mac, ethertype, here, out_netdev = route.next_mac, route.tag, origin, route.netdev
     hops: list[tuple[int, str]] = []
     for _ in range(limit):
-        port = model.role_of_netdev(out_netdev).port
+        port = facts.bindings.role_of_netdev(out_netdev).port
         there = (here + 1) % ring_size if port == 0 else (here - 1) % ring_size
         receiver = facts.find_mac(mac)
-        if receiver is None or receiver[0] != there or model.role_of_netdev(receiver[1]).port != 1 - port:
+        if receiver is None or receiver[0] != there or facts.bindings.role_of_netdev(receiver[1]).port != 1 - port:
             return Trace("misdelivered", tuple(hops), f"a frame for {mac} leaves position {here} port {port}; "
                          f"the cable ends at position {there} port {1 - port}")
         hops.append(receiver)
@@ -597,7 +601,7 @@ def isolation_problems(plans: Sequence[GroupPlan]) -> list[str]:
                                     f"crosses {route.cables}, outside the group's cables {sorted(owned)}")
             for relay_filter in host.filters:
                 for netdev in (relay_filter.in_netdev, relay_filter.out_netdev):
-                    port = model.role_of_netdev(netdev).port
+                    port = host.bindings.role_of_netdev(netdev).port
                     if fabric.cable_at(host.position, port) is None:
                         problems.append(f"{plan.group.label}: {host.name} relays through {netdev} (port {port}), "
                                         "whose cable the group does not own")

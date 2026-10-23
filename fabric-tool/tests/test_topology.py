@@ -36,9 +36,8 @@ def test_defaults_and_overrides():
     custom = topology.parse(RING4 + "port0 mlx5_0 mlx5_2\nport1 mlx5_1 mlx5_3\nrelay_budget 262144\n")
     assert custom.functions == ("mlx5_0", "mlx5_2", "mlx5_1", "mlx5_3")
     assert custom.budget == 262144
-    model.set_roles(topology._roles_of_functions(custom.functions))
-    assert model.RDMA_DEVICES == ("mlx5_0", "mlx5_2", "mlx5_1", "mlx5_3")
-    model.set_roles(model.DEFAULT_ROLES)
+    assert custom.bindings.devices == ("mlx5_0", "mlx5_2", "mlx5_1", "mlx5_3")
+    assert ring.bindings.devices == model.DEFAULT_BINDINGS.devices
 
 
 def test_plugin_key_and_comments():
@@ -74,9 +73,9 @@ def test_group_order_walks_the_fabric():
     assert crossed.group.ring_size == 5
 
 
-def test_load_installs_roles(tmp_path):
+def test_load_preserves_default_bindings(tmp_path):
     path = tmp_path / "ring4.topology"
     path.write_text(RING4, encoding="utf-8")
     ring = topology.load(path)
-    assert [role.device for role in model.ROLES] == list(ring.functions)
-    model.set_roles(model.DEFAULT_ROLES)
+    assert ring.bindings.devices == ring.functions
+    assert model.DEFAULT_BINDINGS.roles == model.DEFAULT_ROLES

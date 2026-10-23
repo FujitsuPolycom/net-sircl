@@ -1,12 +1,12 @@
-"""Boot persistence: the systemd unit that restores the relay table at boot.
+"""Local relay restoration at boot and after link or marker loss.
 
 ``install-boot`` writes the unit ``fabric-table.service``, copies the topology
 file and the facts document to ``/etc/fabric-table/``, enables the unit and
 installs the table now; ``remove-boot`` disables and removes both. The unit
-runs ``apply --boot``, whose restore semantics add every missing object and
-remove nothing, so a boot either reinstalls the whole table (``/run`` is
-cleared, interfaces and their routes and filters come up empty, markers are
-gone) or changes nothing while the table stands.
+runs ``apply --boot --execute`` at startup and reload. A timer requests reload
+every 15 seconds after the preceding check finishes. Restore semantics add
+missing objects and remove nothing. Reload retains the service's marker
+processes; restarting the service on each check would kill healthy markers.
 """
 
 from __future__ import annotations
@@ -14,11 +14,14 @@ from __future__ import annotations
 import dataclasses
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
-from . import commands
+from . import commands, model
 
 UNIT_NAME = "fabric-table.service"
+RECOVERY_SERVICE = "fabric-table-reconcile.service"
+RECOVERY_TIMER = "fabric-table-reconcile.timer"
 INPUT_DIR = "/etc/fabric-table"
 TOPOLOGY_INPUT = f"{INPUT_DIR}/topology"
 FACTS_INPUT = f"{INPUT_DIR}/facts.json"
@@ -27,8 +30,36 @@ BIN_PATH = "/usr/local/bin/fabric-tool"
 DEFAULT_TOOL = BIN_PATH
 
 
-def unit_text(tool: str = DEFAULT_TOOL) -> str:
+@dataclasses.dataclass(frozen=True)
+class RestoreInvocation:
+    """Behavior persisted by the boot unit and used by immediate restoration."""
+
+    tool: str = DEFAULT_TOOL
+    marker: str = commands.DEFAULT_MARKER
+    max_relays: int = model.DEFAULT_MAX_RELAYS
+    host: str | None = None
+    skip_hostname_check: bool = False
+
+    def argv(self) -> tuple[str, ...]:
+        args = (self.tool, "apply", "--boot", "--execute", "--topology", TOPOLOGY_INPUT,
+                "--facts", FACTS_INPUT, "--marker", self.marker, "--max-relays", str(self.max_relays))
+        if self.host:
+            args += ("--host", self.host)
+        if self.skip_hostname_check:
+            args += ("--skip-hostname-check",)
+        return args
+
+
+def systemd_arg(value: str) -> str:
+    """Quote one ExecStart argument, including systemd specifier and variable expansion."""
+    if any(ord(c) < 32 for c in value):
+        raise ValueError("service arguments must not contain control characters")
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$') + '"'
+
+
+def unit_text(tool: str = DEFAULT_TOOL, *, invocation: RestoreInvocation | None = None) -> str:
     """The unit file of ``fabric-table.service``."""
+    invocation = invocation or RestoreInvocation(tool=tool)
     return "\n".join([
         "[Unit]",
         "Description=Fabric relay table of directly cabled DGX Sparks (fabric-tool)",
@@ -38,13 +69,30 @@ def unit_text(tool: str = DEFAULT_TOOL) -> str:
         "",
         "[Service]",
         "Type=oneshot",
-        f"ExecStart={tool} apply --boot --topology {TOPOLOGY_INPUT} --facts {FACTS_INPUT}",
+        "ExecStart=" + " ".join(systemd_arg(arg) for arg in invocation.argv()),
+        "ExecReload=" + " ".join(systemd_arg(arg) for arg in invocation.argv()),
         "RemainAfterExit=yes",
+        "TimeoutStartSec=300",
         "",
         "[Install]",
         "WantedBy=multi-user.target",
         "",
     ])
+
+
+def recovery_service_text() -> str:
+    """Run checks in the retained service's cgroup so markers survive each check."""
+    return ("[Unit]\nDescription=Reconcile missing local fabric relay state\n\n"
+            "[Service]\nType=oneshot\n"
+            f"ExecStart=/usr/bin/systemctl reload-or-restart {UNIT_NAME}\n"
+            "TimeoutStartSec=330\n")
+
+
+def recovery_timer_text() -> str:
+    """Retry incomplete restoration without overlapping local reconciliation jobs."""
+    return ("[Unit]\nDescription=Check local fabric relay state periodically\n\n"
+            "[Timer]\nOnActiveSec=15s\nOnUnitInactiveSec=15s\nAccuracySec=1s\n"
+            f"Unit={RECOVERY_SERVICE}\n\n[Install]\nWantedBy=timers.target\n")
 
 
 def wrapper_text() -> str:
@@ -67,16 +115,20 @@ class BootPlan:
 
     @property
     def commands(self) -> tuple[str, ...]:
-        return ("systemctl daemon-reload", f"systemctl enable {UNIT_NAME}")
+        return ("systemctl daemon-reload", f"systemctl enable {UNIT_NAME} {RECOVERY_TIMER}")
 
 
-def plan(topology_path: str, facts_path: str, tool: str = DEFAULT_TOOL) -> BootPlan:
+def plan(topology_path: str, facts_path: str, tool: str = DEFAULT_TOOL, *,
+         invocation: RestoreInvocation | None = None, topology_text: str | None = None,
+         facts_text: str | None = None) -> BootPlan:
     """The unit and input files of an ``install-boot`` (the caller passes validated inputs)."""
-    topology = Path(topology_path).read_text(encoding="utf-8")
-    facts = Path(facts_path).read_text(encoding="utf-8")
+    topology = topology_text if topology_text is not None else Path(topology_path).read_text(encoding="utf-8")
+    facts = facts_text if facts_text is not None else Path(facts_path).read_text(encoding="utf-8")
     return BootPlan(topology_path, facts_path, UNIT_NAME,
                     ((TOPOLOGY_INPUT, topology), (FACTS_INPUT, facts), (f"/etc/systemd/system/{UNIT_NAME}",
-                                                                       unit_text(tool))))
+                                                                       unit_text(tool, invocation=invocation)),
+                     (f"/etc/systemd/system/{RECOVERY_SERVICE}", recovery_service_text()),
+                     (f"/etc/systemd/system/{RECOVERY_TIMER}", recovery_timer_text())))
 
 
 def install(spec: BootPlan, *, root: str = "/", execute: bool) -> list[str]:
@@ -95,12 +147,39 @@ def install(spec: BootPlan, *, root: str = "/", execute: bool) -> list[str]:
     return written
 
 
+def _wait_for_restoration() -> None:
+    """A stopped systemctl client can leave its manager-side reload job running."""
+    deadline = time.monotonic() + 330
+    while True:
+        result = subprocess.run(["systemctl", "show", UNIT_NAME, "--property=ActiveState", "--property=Job"],
+                                check=True, capture_output=True, text=True, timeout=10)
+        state = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if state.get("ActiveState") not in ("activating", "reloading") and state.get("Job") in ("", "0"):
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("fabric restoration is still running; boot inputs were retained")
+        time.sleep(0.1)
+
+
+def stop_reconciliation() -> None:
+    """Stop scheduling and wait for restoration before changing its code or inputs."""
+    if Path(f"/etc/systemd/system/{RECOVERY_TIMER}").exists():
+        subprocess.run(["systemctl", "stop", RECOVERY_TIMER], check=True)
+    if Path(f"/etc/systemd/system/{RECOVERY_SERVICE}").exists():
+        subprocess.run(["systemctl", "stop", RECOVERY_SERVICE], check=True)
+    _wait_for_restoration()
+
+
 def remove(*, root: str = "/", execute: bool) -> list[str]:
     """Remove the unit and the copied inputs; with ``root`` (tests) under that directory."""
     removed = []
     if root == "/" and execute:
+        stop_reconciliation()
+        if Path(f"/etc/systemd/system/{RECOVERY_TIMER}").exists():
+            subprocess.run(["systemctl", "disable", RECOVERY_TIMER], check=True)
         subprocess.run(["systemctl", "disable", UNIT_NAME], check=True)
-    for destination in (f"/etc/systemd/system/{UNIT_NAME}", TOPOLOGY_INPUT, FACTS_INPUT):
+    for destination in (f"/etc/systemd/system/{UNIT_NAME}", f"/etc/systemd/system/{RECOVERY_SERVICE}",
+                        f"/etc/systemd/system/{RECOVERY_TIMER}", TOPOLOGY_INPUT, FACTS_INPUT):
         path = Path(root) / destination.lstrip("/")
         if path.exists():
             path.unlink()

@@ -15,7 +15,6 @@ from collections.abc import Mapping
 
 from . import commands, model
 from .diff import HostDiff
-from .model import role_of_netdev
 from .ops import Outcome
 from .plan import relays_left
 from .state import HostState
@@ -25,7 +24,7 @@ def _lookups(states: Mapping[int, HostState]) -> tuple[dict[str, str], dict[str,
     addresses, macs = {}, {}
     for state in states.values():
         for name, link in state.links.items():
-            if name not in model.FABRIC_NETDEVS:
+            if name not in state.bindings.netdevs:
                 continue
             if link.mac:
                 macs[link.mac] = f"{state.name} {name}"
@@ -57,7 +56,7 @@ def render_show(states: Mapping[int, HostState], marker: commands.MarkerConfig) 
         for problem in ([state.record_problem] if state.record_problem else []) + state.parse_problems:
             lines.append(f"  problem: {problem}")
         ports = []
-        for netdev in model.FABRIC_NETDEVS:
+        for netdev in state.bindings.netdevs:
             link = state.links.get(netdev)
             if link is None:
                 ports.append(f"{netdev} missing")
@@ -75,10 +74,10 @@ def render_show(states: Mapping[int, HostState], marker: commands.MarkerConfig) 
         neighbours = {(n.destination, n.dev): n for n in state.relay_neighbours()}
         lines.append(f"  routes: {len(relay_routes)} relay routes "
                      f"({sum(1 for r in relay_routes if not r.owned)} unowned)")
-        for route in sorted(relay_routes, key=lambda r: (model.FABRIC_NETDEVS.index(r.dev)
-                                                         if r.dev in model.FABRIC_NETDEVS else 9, r.destination)):
+        for route in sorted(relay_routes, key=lambda r: (state.bindings.netdevs.index(r.dev)
+                                                         if r.dev in state.bindings.netdevs else 9, r.destination)):
             neighbour = neighbours.pop((route.destination, route.dev), None)
-            device = role_of_netdev(route.dev).device if route.dev in model.FABRIC_NETDEVS else None
+            device = state.bindings.role_of_netdev(route.dev).device if route.dev in state.bindings.netdevs else None
             value = tags.get((device, route.destination))
             tag_text = f"tag 0x{value:04x}" if value is not None else "no tag"
             if neighbour is None:
@@ -99,7 +98,7 @@ def render_show(states: Mapping[int, HostState], marker: commands.MarkerConfig) 
             installed = (f"installed {log.get('installed')}/{len(log.get('rules', []))}" if "installed" in log
                          else "no log")
             lines.append(f"    {process.text()}; {installed} [{owner}]")
-        filters = [entry for netdev in model.FABRIC_NETDEVS for entry in state.reserved_filters(netdev)]
+        filters = [entry for netdev in state.bindings.netdevs for entry in state.reserved_filters(netdev)]
         lines.append(f"  relay filters: {len(filters)}")
         for entry in filters:
             k = relays_left(entry.protocol) if entry.protocol is not None else None

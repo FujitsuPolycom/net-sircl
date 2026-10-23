@@ -14,8 +14,9 @@ make check-release
 real-NIC plugin and the packet marker. `make emu` builds the shared-memory
 test plugin. `make check` runs:
 
-- transport-core: two C test executables for concurrent window arithmetic, abort/progress
-  callbacks and emulated verbs, plus four Python discovery/topology tests.
+- transport-core: three C test executables for concurrent window arithmetic, abort/progress
+  callbacks, emulated verbs and barrier-controlled executor/mapping lifetimes,
+  plus five Python discovery/topology tests.
 - net-sircl: Python tests, including multiprocess transfer, window, lane,
   teardown, peer-loss and deadline tests, fixed topology expectations and
   the real-NIC library's v7–v12 export check, ABI layout calls, route/ACK
@@ -28,7 +29,8 @@ test plugin. `make check` runs:
   checkout or full-network simulator is used. These do not exercise real
   apply/verify/remove across hosts or restoration after an actual reboot.
 - Release contracts: shipped C/C++/header hashes, example routes, embedded core
-  identity, and archive reproducibility/completeness. The archive test creates
+  identity, and archive reproducibility/completeness, extracted-source privacy scanning and
+  complete distributed C/C++/header inventory. The archive test creates
   an untracked file under docs and checks that the archive still contains
   exactly `git ls-files`. This test skips in an extracted archive without Git
   metadata; the other three release tests run there.
@@ -55,6 +57,14 @@ and windowed/two-lane modes each verify all-reduce, all-gather and broadcast
 at six sizes from 8 KiB to 64 MiB, plus 20 CUDA-graph replays at 64 KiB.
 Graphs are released before process-group destruction. Each rank must select
 sircl, report seven exact-result lines and exit successfully.
+
+The launcher restricts CPU-staged emulation to LL and Simple. LL128 relies on
+128-byte data/flag visibility that ordinary CPU copies do not guarantee; it
+is not qualified by a passing run. A request that enables LL128 is rejected
+before ranks start. `--allow-ll128` is an explicit diagnostic opt-in for the
+launcher, including its Socket control; it may produce incorrect results.
+This policy affects emulation subprocesses only. The production RDMA plugin's
+tuner and the process-wide environment are unchanged.
 
 Logs and JSON summaries go under `test-results/`, which Git ignores and
 `make package` excludes. Logs contain this machine's host name; check them
@@ -93,6 +103,8 @@ host or establish performance. See the [hardware procedure](../fabric-tool/HARDW
 ```sh
 make package
 python3 scripts/check_release_safety.py .
+# For an extracted source archive without Git metadata:
+python3 scripts/check_release_safety.py --tree EXTRACTED_DIRECTORY
 ```
 
 The archive is `dist/net-sircl-0.1.2.tar.gz`, built from `git ls-files` in
@@ -107,8 +119,9 @@ IPv4 addresses outside documentation/loopback ranges, user-home paths and
 credential-like strings. It reports locations and rule names without matched
 values. `--site-values FILE` adds literal host names or addresses, one per line;
 keep the file untracked (`scripts/config/site-values.txt` is ignored and
-excluded). The scanner checks Git-tracked text; archive privacy is checked by
-scanning its extracted text with the same rules.
+excluded). The scanner checks Git-tracked text by default. `--tree` enumerates confined
+regular files without Git metadata and refuses symbolic links. CI scans the
+extracted archive before building it, using the same rules.
 
 ## Source identity
 
@@ -116,7 +129,7 @@ The startup line `net-sircl transport-core 0.1.1 ABI 1 source <sha256>` contains
 a digest of transport-core's C sources, headers, Python tools and VERSION.
 It is not a compiled-library checksum. Removing Python adaptation tools and
 changing packaging or the component version changes this digest.
-[SOURCE.json](../SOURCE.json) separates shipped checksums, candidate provenance
+[SOURCE.json](../SOURCE.json) separates distributed source checksums, upstream provenance
 and immutable historical 0.1.0 measured hashes. They do not qualify this binary.
 See [retained compatibility code](transport-core.md#retained-compatibility-code).
 
@@ -133,3 +146,9 @@ Use the site's GPU reservation for these commands.
 reproducer. CPU fault injection covers silent peers, lost completion delivery,
 sticky errors and bounded close. Fabric tests cover missing forwarding rules,
 lost `in_hw`, unreachable relays and verify blockers without contacting a host.
+
+The distributed source inventory is regenerated with
+`python3 scripts/update_source_manifest.py`. Its test checks both hashes and
+completeness, including `fabric-tool/mesh_marker.c`, private implementation
+modules and C test harnesses. Updating hashes does not establish hardware
+qualification; see [qualification evidence](qualification.md).

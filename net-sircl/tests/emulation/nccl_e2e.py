@@ -35,6 +35,28 @@ import threading
 SIZES = [8 << 10, 64 << 10, 512 << 10, 4 << 20, 32 << 20, 64 << 20]
 
 
+def select_protocols(value, *, allow_ll128):
+    """Restrict CPU-staged transfers to LL/Simple unless LL128 is diagnostic intent."""
+    if allow_ll128:
+        return value or "LL,LL128,Simple"
+    value = value or "LL,Simple"
+    clauses = value.split(";")
+    if ":" in clauses[0]:
+        clauses.insert(0, "LL,Simple")
+    protocols = {"LL", "LL128", "SIMPLE"}
+    for clause in clauses:
+        selection = clause.rsplit(":", 1)[-1]
+        excluded = selection.startswith("^")
+        selected = set(selection.lstrip("^").upper().split(","))
+        if not selected <= protocols:
+            raise ValueError("invalid NCCL_PROTO selection for emulation")
+        enabled = protocols - selected if excluded else selected
+        if "LL128" in enabled:
+            raise ValueError("LL128 is unsafe for CPU-staged emulation; use LL,Simple or "
+                             "--allow-ll128 for a diagnostic run that may produce incorrect data")
+    return ";".join(clauses)
+
+
 def rank_main(args):
     import torch
     import torch.distributed as dist
@@ -105,7 +127,10 @@ def launch(args):
     base = dict(os.environ, WORLD_SIZE=str(args.world_size), MASTER_ADDR="127.0.0.1", MASTER_PORT=str(29500 + os.getpid() % 500),
                 NCCL_MULTI_RANK_GPU_ENABLE="1", NCCL_P2P_DISABLE="1", NCCL_SHM_DISABLE="1", NCCL_NVLS_ENABLE="0",
                 NCCL_DEBUG="INFO",
-                NCCL_DEBUG_SUBSYS="INIT,NET,TUNING", NCCL_SOCKET_IFNAME="lo")
+                NCCL_DEBUG_SUBSYS="INIT,NET,TUNING", NCCL_SOCKET_IFNAME="lo",
+                NCCL_PROTO=select_protocols(os.environ.get("NCCL_PROTO"), allow_ll128=args.allow_ll128))
+    if args.allow_ll128:
+        print("diagnostic LL128 opt-in: CPU-staged transfers may produce incorrect data", file=sys.stderr)
     if args.net == "sircl":
         base.update(NCCL_NET="sircl", NCCL_NET_PLUGIN=args.plugin, NET_SIRCL_OOB_ADDR="127.0.0.1",
                     SIRCL_EMU_FABRIC=f"/sircl-emu-glm-e2e-{os.getpid()}", NET_SIRCL_STANDIN_DEVICES="4")
@@ -152,7 +177,7 @@ def launch(args):
         if os.path.exists(shm):
             os.unlink(shm)
     rendezvous.cleanup()
-    summary = {"net": args.net, "teardown": args.teardown, "windowed": args.windowed,
+    summary = {"net": args.net, "teardown": args.teardown, "windowed": args.windowed, "protocols": base["NCCL_PROTO"],
                "backend": "native" if args.native else "pytorch", "ranks": results}
     print(json.dumps(summary))
     return 0 if all(r["pass"] and r["exit"] == 0 and not r["wrong"] and
@@ -165,6 +190,8 @@ def main():
     parser.add_argument("--rank", action="store_true")
     parser.add_argument("--teardown", choices=("release-graph", "keep-graph"), default="release-graph")
     parser.add_argument("--net", choices=("sircl", "socket"), default="sircl")
+    parser.add_argument("--allow-ll128", action="store_true",
+                        help="allow LL128 in CPU-staged emulation for diagnosis; correctness is not guaranteed")
     parser.add_argument("--windowed", action="store_true")
     parser.add_argument("--world-size", type=int, default=2)
     parser.add_argument("--layout", choices=("path", "ring"), default="path")
@@ -187,6 +214,10 @@ def main():
         parser.error("the native backend releases its graph before communicator teardown")
     if args.rank:
         return rank_main(args)
+    try:
+        select_protocols(os.environ.get("NCCL_PROTO"), allow_ll128=args.allow_ll128)
+    except ValueError as error:
+        parser.error(str(error))
     return launch(args)
 
 

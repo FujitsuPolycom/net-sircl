@@ -13,8 +13,8 @@ Schema ``fabric-tool-facts/v1``:
 function names are the topology file's (its defaults or its ``port0``/
 ``port1`` lines). ``fabric-tool facts`` produces the document from host reads
 (:func:`from_states`); ``--facts`` files are merged (:func:`load`) and
-validated against the topology (:func:`bind`, which also installs the role
-table with the netdevs the hosts name).
+validated against the topology (:func:`bind`, which returns immutable device
+bindings with the host facts).
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def from_states(states: dict[int, HostState], topology: Topology) -> dict[str, o
         if not state.reachable or topology.position_of(state.name) < 0 and position != state.position:
             continue
         functions: dict[str, dict[str, object]] = {}
-        for device in model.RDMA_DEVICES:
+        for device in state.bindings.devices:
             netdev = state.rdma.get(device, "")
             link = state.links.get(netdev)
             if link is None or len(link.addresses) != 1 or not link.mac:
@@ -119,7 +119,7 @@ def bind(document: dict[str, object], topology: Topology) -> Facts:
     Every topology function must be bound on every host; a host must be a
     topology entry; an optional position must match; the same function must
     name the same network device on every host (SIRCL's rule for a fabric);
-    the role table is installed with those devices.
+    the returned facts retain those device bindings.
     """
     rows = document.get("hosts")
     if not isinstance(rows, list) or not rows:
@@ -139,6 +139,10 @@ def bind(document: dict[str, object], topology: Topology) -> Facts:
     if missing:
         raise FabricError(f"facts are missing {', '.join(missing)}; read every host of the topology "
                           "(`facts`) or complete the facts files")
+    for name, (_, functions) in by_name.items():
+        missing_functions = set(topology.functions) - functions.keys()
+        if missing_functions:
+            raise FabricError(f"facts for {name} lack functions {sorted(missing_functions)}")
     netdevs: dict[str, str] = {}
     for device in topology.functions:
         named = {str(by_name[name][1][device]["netdev"]) for name in topology.hosts}
@@ -149,7 +153,7 @@ def bind(document: dict[str, object], topology: Topology) -> Facts:
     roles = tuple(model.Role(("cw_primary", "cw_secondary", "ccw_primary", "ccw_secondary")[index],
                              device, netdevs[device], index // 2, bool(index % 2))
                   for index, device in enumerate(topology.functions))
-    model.set_roles(roles)
+    bindings = model.FabricBindings(roles)
     hosts = []
     for position, name in enumerate(topology.hosts):
         functions = by_name[name][1]
@@ -159,7 +163,7 @@ def bind(document: dict[str, object], topology: Topology) -> Facts:
             ports.append(Port(str(bound["netdev"]), str(bound["mac"]), str(bound["address"]),
                               bound["prefixlen"] if isinstance(bound["prefixlen"], int) else None))
         hosts.append(HostFacts(position, name, tuple(ports)))
-    facts = Facts(hosts)
+    facts = Facts(hosts, bindings=bindings)
     problems = facts.problems()
     if problems:
         raise FabricError("; ".join(problems))
@@ -172,7 +176,7 @@ def problems_against_reads(facts: Facts, states: dict[int, HostState], topology:
     for position, state in sorted(states.items()):
         if not state.reachable or topology.position_of(state.name) != position:
             continue
-        for netdev in model.FABRIC_NETDEVS:
+        for netdev in facts.bindings.netdevs:
             bound = facts.port(position, netdev) if facts.has(position) else None
             reported = state.port(netdev)
             if bound is None or reported is None:

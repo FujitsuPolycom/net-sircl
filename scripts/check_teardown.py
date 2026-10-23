@@ -30,6 +30,8 @@ def main():
             result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=200)
             print(result.stdout, end="", flush=True)
             print(result.stderr, end="", file=sys.stderr)
+            if not result.stdout.strip():
+                raise RuntimeError(result.stderr.strip() or "emulation launcher returned no rank summary")
             summary = json.loads(result.stdout.strip().splitlines()[-1])
             (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
             ranks = summary["ranks"]

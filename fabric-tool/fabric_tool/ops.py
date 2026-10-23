@@ -102,23 +102,23 @@ def _parallel(jobs: Sequence[int], work: Callable[[int], T]) -> dict[int, T]:
 
 
 def gather(hosts: dict[int, HostTarget], positions: Iterable[int], executor: Executor,
-           marker: commands.MarkerConfig, *, timeout: float = READ_TIMEOUT) -> dict[int, HostState]:
+           marker: commands.MarkerConfig, *, timeout: float = READ_TIMEOUT, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> dict[int, HostState]:
     """Read every listed host (READ-ONLY REMOTE)."""
-    script = commands.read_script(marker)
+    script = commands.read_script(marker, bindings=bindings)
 
     def read(position: int) -> HostState:
         target = hosts[position]
         result = executor(target.ssh or "", script, timeout)
         return state_mod.parse(position, target.name, target.ssh or "", returncode=result.returncode,
-                               stdout=result.stdout, stderr=result.stderr)
+                               stdout=result.stdout, stderr=result.stderr, bindings=bindings)
 
     return {position: state for position, state in _parallel(sorted(set(positions)), read).items()}
 
 
-def facts_from(states: dict[int, HostState]) -> Facts:
+def facts_from(states: dict[int, HostState], *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> Facts:
     """The addresses and MACs the hosts report (only usable ports are included)."""
-    return Facts(HostFacts(position, state.name, state.ports())
-                 for position, state in sorted(states.items()) if state.reachable)
+    return Facts((HostFacts(position, state.name, state.ports())
+                 for position, state in sorted(states.items()) if state.reachable), bindings=bindings)
 
 
 def cable_problems(group: GroupSpec, facts: Facts) -> list[str]:
@@ -127,8 +127,8 @@ def cable_problems(group: GroupSpec, facts: Facts) -> list[str]:
     problems = []
     for cable in group.layout.fabric.cables:
         for secondary in (False, True):
-            here = facts.port(cable.a, model.role_at(cable.a_port, secondary).netdev)
-            there = facts.port(cable.b, model.role_at(cable.b_port, secondary).netdev)
+            here = facts.port(cable.a, facts.bindings.role_at(cable.a_port, secondary).netdev)
+            there = facts.port(cable.b, facts.bindings.role_at(cable.b_port, secondary).netdev)
             networks = (here.network(), there.network())
             if None in networks:
                 continue
@@ -179,10 +179,10 @@ def evaluate(topology: Topology, states: dict[int, HostState], file_facts: Facts
     group = topology.group
     compared = sorted(set(positions if positions is not None else group.order))
     outcome = Outcome(topology, group, mode, None)
-    problems = model.isolation_problems([model.derive_routes(group.layout, 2)])
+    problems = model.isolation_problems([model.derive_routes(group.layout, 2, bindings=file_facts.bindings if file_facts else topology.bindings)])
     if problems:
         raise FabricError("isolation: " + "; ".join(problems))
-    read_facts = facts_from(states)
+    read_facts = facts_from(states, bindings=file_facts.bindings if file_facts else topology.bindings)
     if len(read_facts.positions) == len(group.members) and file_facts is None:
         facts = read_facts
     elif file_facts is not None:
@@ -200,7 +200,7 @@ def evaluate(topology: Topology, states: dict[int, HostState], file_facts: Facts
         return outcome
     problems += [problem for position in compared
                  for problem in states[position].fact_problems(check_hostname=False)]
-    member_facts = Facts([read_facts.host(p) for p in compared if read_facts.has(p)])
+    member_facts = Facts([read_facts.host(p) for p in compared if read_facts.has(p)], bindings=read_facts.bindings)
     problems += member_facts.problems()
     plan = None
     if not problems:

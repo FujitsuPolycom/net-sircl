@@ -22,6 +22,7 @@ HERE = Path(__file__).resolve().parents[1]
 STANDIN = HERE / "tests" / "standin"
 CORE = next(p for p in (HERE.parents[1] / "transport-core", HERE.parent / "transport-core") if (p / "VERSION").is_file())
 CORE_SOURCES = [str(CORE / "src" / f) for f in ("core.c", "topology.c", "sysfs.c")]
+CORE_SOURCES += [str(HERE / "net_sircl_plan.c")]
 FLAGS = ["-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread"]
 STANDIN_FLAGS = ["-I", str(CORE / "include"), "-DNET_SIRCL_STANDIN", "-I", str(HERE), "-I", str(STANDIN / "fake_verbs"), "-I", str(STANDIN)]
 
@@ -47,6 +48,19 @@ class NetSirclTests(unittest.TestCase):
         cls.build.cleanup()
 
     # -- layer tests --
+    def test_registration_and_receive_capacity_contracts(self):
+        exe = Path(self.build.name) / "request_contract_test"
+        subprocess.run([os.environ.get("CC", "cc"), *FLAGS, *STANDIN_FLAGS,
+                        str(HERE / "tests/request_contract_test.c"), str(STANDIN / "shm_verbs.c"),
+                        *CORE_SOURCES, "-o", str(exe)], check=True)
+        env = dict(os.environ, SIRCL_EMU_FABRIC=f"/sircl-contract-{os.getpid()}")
+        try:
+            result = subprocess.run([str(exe), str(self.topology)], env=env,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        finally:
+            (Path("/dev/shm") / env["SIRCL_EMU_FABRIC"].lstrip("/")).unlink(missing_ok=True)
+
     def test_silent_and_lost_peers_fail_and_close(self):
         exe = Path(self.build.name) / "failure_test"
         subprocess.run([os.environ.get("CC", "cc"), *FLAGS, *STANDIN_FLAGS,
@@ -381,8 +395,8 @@ class NetSirclTests(unittest.TestCase):
         # tree and P2P routes and every multiplicity of channels on those routes.
         libpath = Path(self.build.name) / "route_model.so"
         subprocess.run([os.environ.get("CC", "cc"), *FLAGS, *STANDIN_FLAGS, "-shared", "-fPIC",
-                        str(HERE / "tests" / "route_model.c"), str(STANDIN / "shm_verbs.c"),
-                        *CORE_SOURCES, "-o", str(libpath)], check=True)
+                        str(HERE / "tests" / "route_model.c"), str(HERE / "net_sircl_plan.c"),
+                        str(CORE / "src/topology.c"), "-o", str(libpath)], check=True)
         lib = ctypes.CDLL(str(libpath))
         lib.test_route_caps.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
         names = ["emu0", "emu1", "emu2", "emu3"]

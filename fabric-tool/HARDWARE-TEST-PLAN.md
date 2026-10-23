@@ -1,12 +1,10 @@
 # Hardware validation of the standalone fabric tool
 
-Status: the ring/path table exercise ran on one ring of four DGX Sparks
-with an earlier revision: both tables were installed and verified, plugin test
-arms passed on the path table, the tool's table was removed, and SparkRing's
-table was restored. Two script defects were fixed afterwards on CPU; the fixed
-version has not yet been rerun on hardware. See `docs/release-0.1.0.md` in the
-repository for details. Boot restoration and the full two-ring procedure below
-remain unqualified. CPU tests do not qualify real forwarding or boot restoration.
+Status: research-only. This procedure qualifies physical forwarding, resource
+ownership and actual boot restoration of the exact source and binary under test.
+The recorded table exercise is scoped in `../docs/release-0.1.0.md`; source
+identities and measurement limits are listed in `../docs/qualification.md`.
+CPU tests establish software contracts, not real forwarding or boot restoration.
 
 Use placeholders `node-0` through `node-3` for one ring and `node-4` through
 `node-7` for the other. Substitute actual host names and SSH targets privately.
@@ -77,9 +75,18 @@ CPU tests predict no throughput value. Compare only matched runs.
 ## Boot persistence (about 15 minutes on one ring)
 
 Install the boot unit locally on all four hosts with identical complete facts.
+Keep interface addressing persistent through an independent network service;
+the fabric tool does not assign addresses. If that service runs after
+`network-online.target`, require and order it before `fabric-table.service`.
 Reboot one host; wait for addresses and the unit to become ready. Require
 `verify` to pass for every host and repeat a relayed traffic probe. Record the
 systemd journal and counters. Keep any other installer's restore disabled.
+Record local restoration separately from group verification. A carrier reset
+can remove adjacent hosts' routes and neighbours. Require the periodic local
+checks to restore those entries without an operator apply. Record convergence
+time and verify that healthy marker PIDs remain unchanged across checks.
+If group verification fails, preserve that result before operator repair;
+successful traffic after repair does not qualify automatic group recovery.
 
 ## Remove and restore (about 10 minutes per ring)
 

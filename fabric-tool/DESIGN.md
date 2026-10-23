@@ -37,9 +37,9 @@ is a oneshot operation rather than marker supervision.
 
 See the installed guide `share/doc/net-sircl/docs/fabric.md` for the relay
 mechanism and command sequence. `HARDWARE-TEST-PLAN.md` describes hardware
-qualification. An earlier revision ran the ring/path table exercise on four
-DGX Sparks; the script fixes in this version have only been tested on CPU.
-The tool remains research-only. Standalone tests cover planning, facts, command forms,
+qualification. Status: research-only. Recorded hardware evidence and its
+source identities are listed in `../docs/qualification.md`.
+Standalone tests cover planning, facts, command forms,
 boot previews and mocked boot operations; full-network simulation and
 comparison tests that require another project are not distributed.
 
@@ -70,3 +70,22 @@ the detached root shell creates the log and redirects marker stdout and stderr
 there. The SSH caller can finish without waiting for the long-lived marker.
 Standalone Bash regression tests check digest/ownership parsing and require
 the caller's captured output to close before a simulated marker exits.
+
+## Configuration and reconciliation ownership
+
+Implemented: each operation resolves an immutable `FabricBindings` value before
+collecting host observations. Facts, host observations and host plans retain that
+value; parsing another topology does not change existing plans or reports.
+Device identifiers are validated before script generation and quoted as shell
+arguments. Topology parsing has no process-global side effects.
+
+Apply and boot restoration use one resource reconciler. Its policy controls
+stale-object removal and adoption requirements. Restoration retains stale
+objects; apply reconciles them. Qdisc ownership records contain only interfaces
+where the tool added a qdisc, plus previously recorded ownership. Removal leaves
+a pre-existing unowned qdisc intact and preserves qdiscs with unrelated filters.
+
+`RestoreInvocation` retains execution intent, facts, topology, marker location,
+relay limit and optional host selection. The systemd unit serializes its argument
+vector using systemd escaping. Offline installation uses the same reconciler
+against an empty observation, rather than a separate command sequence.
