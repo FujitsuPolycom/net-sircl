@@ -180,4 +180,3 @@ void sircl_emu_mapping_release(sv_segment *mapping) {
   pthread_cond_broadcast(&segment_retired);
   pthread_mutex_unlock(&segments_lock);
 }
-

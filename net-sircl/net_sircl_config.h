@@ -200,4 +200,3 @@ int net_sircl_topology_routes(const char *path, int position, char *out, size_t 
   }
   return 0;
 }
-

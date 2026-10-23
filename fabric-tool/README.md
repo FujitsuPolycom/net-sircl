@@ -4,13 +4,15 @@ fabric-tool configures relays between directly cabled DGX Sparks: NIC
 forwarding rules on intermediate hosts, sender IP routes and neighbour entries,
 and a per-NIC marker process that tags outgoing RDMA packets with the number
 of relays to cross. It reads net-sircl's topology file.
-Version **0.1.1**, Apache-2.0; derived from the SparkRing project, see
+Version **0.1.2**, Apache-2.0; derived from the SparkRing project, see
 [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-Status: research-only. An earlier revision installed and verified ring and
-path tables on four DGX Sparks; plugin test arms passed on the path table.
-The two script fixes included here are CPU-tested and have not yet been rerun
-on hardware. See the repository's `docs/release-0.1.0.md` for the run's scope.
+Status: research-only. The tool implements relay planning, ownership checks,
+hardware-offload verification and explicit boot restoration. CPU checks qualify
+these software contracts; real forwarding and reboot restoration require the
+[hardware procedure](HARDWARE-TEST-PLAN.md). The repository's
+[qualification table](../docs/qualification.md) identifies recorded hardware
+evidence separately from the source checks.
 Standalone tests cover planning, facts, command forms, marker security checks,
 boot previews and mocked boot operations. They do not prove real NIC forwarding
 or reboot restoration.

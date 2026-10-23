@@ -131,9 +131,11 @@ Use [the hardware check](../examples/torch_teardown.py) under an outer 150-secon
 job timeout. It checks eight eager all-reduce sizes and 20 graph replays, releases
 the graph, then enforces a separate 15-second teardown bound.
 
-The 0.1.1 hardware T1 script retained its graph. The same ordering reproduces on
-the workstation with both transports; resetting the graph lets both exit. NCCL
+Graph references must be released before communicator destruction. NCCL
 2.32.3's [commDestroySync](https://github.com/NVIDIA/nccl/blob/v2.32.3-1/src/init.cc#L3122)
-waits for graph references before stopping proxy threads and closing the network.
-This fixes the test/application lifetime; it does not establish that all hardware
-teardown failures have been resolved. The corrected T1 still needs the ring8c run.
+waits for those references before stopping proxy threads and closing the network.
+The recorded four-host path check passed nine exact checks per rank and reported
+0.54–0.68 seconds for destruction, with `PASS` and exit 0 on all ranks.
+The [qualification table](qualification.md) identifies the source revision and
+conditions for that result. Other graph lifetimes and modified plugin builds
+require their own validation; this result is not a guarantee for every teardown.

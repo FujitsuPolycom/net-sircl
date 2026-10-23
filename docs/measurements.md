@@ -1,15 +1,12 @@
 # Historical 0.1.0 measurements
 
-These records describe the 0.1.0 transport. See the
-[0.1.1 release notes](../RELEASE_NOTES-0.1.1.md) for wire-6 candidate measurements
-and the pending final-pass record. Historical byte-equality claims below apply
-to 0.1.0, not to the 0.1.1 tree.
+These records describe the 0.1.0 transport. The source bytes associated with
+these measurements are identified by the historical 0.1.0 hash inventory in
+[SOURCE.json](../SOURCE.json). They do not qualify modified plugin builds.
+The [qualification table](qualification.md) links the 0.1.1 and 0.1.2 evidence.
 
-These are research-only communication measurements on DGX Spark GB10, not
-serving qualification or throughput guarantees. The measured plugin builds
-used transport C sources and NVIDIA headers byte-identical to this release
-([SOURCE.json](../SOURCE.json)), with a different plugin version string.
-The 0.1.0 library itself has not run on Sparks. Raw logs are not published
+Status: research-only. These are communication measurements on DGX Spark GB10,
+not serving qualification or throughput guarantees. Raw logs are not published
 because they contain site-specific host information.
 
 ## Conditions

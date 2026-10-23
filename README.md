@@ -9,8 +9,9 @@ it with no code changes, and NCCL keeps its own collective algorithms and
 CUDA-graph support.
 
 Version **0.1.2**, wire version **6** (every host in a job must use the same
-wire version). Research-only; hardware-qualified on DGX Sparks under the
-conditions in the [release notes](RELEASE_NOTES-0.1.2.md).
+wire version). Status: **research-only**. The [qualification table](docs/qualification.md)
+identifies the exact source revisions and conditions of recorded DGX Spark
+results; modified source builds require separate hardware qualification.
 
 ## What it does
 

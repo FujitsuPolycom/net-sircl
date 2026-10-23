@@ -205,4 +205,3 @@ static ncclResult_t poll_cq(struct comm *c) {
   }
   return ncclSuccess;
 }
-

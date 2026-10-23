@@ -143,11 +143,11 @@ relays and the tool copy; use `remove` for live relays.
 
 ## Validation boundary
 
-Status: research-only. An earlier revision installed and verified ring and
-path tables on a ring of four DGX Sparks, passed plugin test arms on the path
-table, removed its table and restored SparkRing's table. Two defects found
-during that exercise were fixed afterwards on CPU; this fixed version has not
-yet been rerun on hardware. See the [release notes](release-0.1.0.md).
+Status: research-only. Relay planning, command generation, ownership checks
+and restoration policy have CPU regression checks. Physical forwarding and
+restoration after a reboot require the hardware procedure. The
+[qualification table](qualification.md) identifies the source and conditions
+of recorded hardware evidence.
 Standalone tests cover planning, facts, generated Bash scripts, marker security,
 boot previews and mocked boot operations. They do not simulate an entire
 network or establish reboot restoration. See [testing and CI](testing.md),
