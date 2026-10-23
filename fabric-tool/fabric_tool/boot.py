@@ -1,12 +1,12 @@
-"""Boot persistence: the systemd unit that restores the relay table at boot.
+"""Local relay restoration at boot and after link or marker loss.
 
 ``install-boot`` writes the unit ``fabric-table.service``, copies the topology
 file and the facts document to ``/etc/fabric-table/``, enables the unit and
 installs the table now; ``remove-boot`` disables and removes both. The unit
-runs ``apply --boot --execute``, whose restore semantics add every missing object and
-remove nothing, so a boot either reinstalls the whole table (``/run`` is
-cleared, interfaces and their routes and filters come up empty, markers are
-gone) or changes nothing while the table stands.
+runs ``apply --boot --execute`` at startup and reload. A timer requests reload
+every 15 seconds after the preceding check finishes. Restore semantics add
+missing objects and remove nothing. Reload retains the service's marker
+processes; restarting the service on each check would kill healthy markers.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from pathlib import Path
 from . import commands, model
 
 UNIT_NAME = "fabric-table.service"
+RECOVERY_SERVICE = "fabric-table-reconcile.service"
+RECOVERY_TIMER = "fabric-table-reconcile.timer"
 INPUT_DIR = "/etc/fabric-table"
 TOPOLOGY_INPUT = f"{INPUT_DIR}/topology"
 FACTS_INPUT = f"{INPUT_DIR}/facts.json"
@@ -67,12 +69,29 @@ def unit_text(tool: str = DEFAULT_TOOL, *, invocation: RestoreInvocation | None 
         "[Service]",
         "Type=oneshot",
         "ExecStart=" + " ".join(systemd_arg(arg) for arg in invocation.argv()),
+        "ExecReload=" + " ".join(systemd_arg(arg) for arg in invocation.argv()),
         "RemainAfterExit=yes",
+        "TimeoutStartSec=300",
         "",
         "[Install]",
         "WantedBy=multi-user.target",
         "",
     ])
+
+
+def recovery_service_text() -> str:
+    """Run checks in the retained service's cgroup so markers survive each check."""
+    return ("[Unit]\nDescription=Reconcile missing local fabric relay state\n\n"
+            "[Service]\nType=oneshot\n"
+            f"ExecStart=/usr/bin/systemctl reload-or-restart {UNIT_NAME}\n"
+            "TimeoutStartSec=330\n")
+
+
+def recovery_timer_text() -> str:
+    """Retry incomplete restoration without overlapping local reconciliation jobs."""
+    return ("[Unit]\nDescription=Check local fabric relay state periodically\n\n"
+            "[Timer]\nOnActiveSec=15s\nOnUnitInactiveSec=15s\nAccuracySec=1s\n"
+            f"Unit={RECOVERY_SERVICE}\n\n[Install]\nWantedBy=timers.target\n")
 
 
 def wrapper_text() -> str:
@@ -95,7 +114,7 @@ class BootPlan:
 
     @property
     def commands(self) -> tuple[str, ...]:
-        return ("systemctl daemon-reload", f"systemctl enable {UNIT_NAME}")
+        return ("systemctl daemon-reload", f"systemctl enable {UNIT_NAME} {RECOVERY_TIMER}")
 
 
 def plan(topology_path: str, facts_path: str, tool: str = DEFAULT_TOOL, *,
@@ -106,7 +125,9 @@ def plan(topology_path: str, facts_path: str, tool: str = DEFAULT_TOOL, *,
     facts = facts_text if facts_text is not None else Path(facts_path).read_text(encoding="utf-8")
     return BootPlan(topology_path, facts_path, UNIT_NAME,
                     ((TOPOLOGY_INPUT, topology), (FACTS_INPUT, facts), (f"/etc/systemd/system/{UNIT_NAME}",
-                                                                       unit_text(tool, invocation=invocation))))
+                                                                       unit_text(tool, invocation=invocation)),
+                     (f"/etc/systemd/system/{RECOVERY_SERVICE}", recovery_service_text()),
+                     (f"/etc/systemd/system/{RECOVERY_TIMER}", recovery_timer_text())))
 
 
 def install(spec: BootPlan, *, root: str = "/", execute: bool) -> list[str]:
@@ -129,8 +150,13 @@ def remove(*, root: str = "/", execute: bool) -> list[str]:
     """Remove the unit and the copied inputs; with ``root`` (tests) under that directory."""
     removed = []
     if root == "/" and execute:
+        if Path(f"/etc/systemd/system/{RECOVERY_TIMER}").exists():
+            subprocess.run(["systemctl", "disable", "--now", RECOVERY_TIMER], check=True)
+        if Path(f"/etc/systemd/system/{RECOVERY_SERVICE}").exists():
+            subprocess.run(["systemctl", "stop", RECOVERY_SERVICE], check=True)
         subprocess.run(["systemctl", "disable", UNIT_NAME], check=True)
-    for destination in (f"/etc/systemd/system/{UNIT_NAME}", TOPOLOGY_INPUT, FACTS_INPUT):
+    for destination in (f"/etc/systemd/system/{UNIT_NAME}", f"/etc/systemd/system/{RECOVERY_SERVICE}",
+                        f"/etc/systemd/system/{RECOVERY_TIMER}", TOPOLOGY_INPUT, FACTS_INPUT):
         path = Path(root) / destination.lstrip("/")
         if path.exists():
             path.unlink()

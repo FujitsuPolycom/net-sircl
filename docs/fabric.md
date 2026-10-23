@@ -116,7 +116,7 @@ Using the shell function above, run `fabric status`, then `fabric remove` to
 preview and `fabric remove --execute` to remove. Inspect ownership before
 using `--adopt`; routes outside the relay plan are not adopted.
 
-## Boot restoration
+## Boot and link-reset restoration
 
 Install the repository on every Spark. Copy the same topology and a `facts.json`
 covering every host to each Spark. Run locally on **each Spark**:
@@ -131,26 +131,33 @@ sudo /opt/net-sircl/bin/fabric-tool install-boot \
 This writes topology and facts under `/etc/fabric-table/`, copies the tool to
 `/usr/local/lib/fabric-tool` and `/usr/local/bin/fabric-tool` (separate from the
 `/opt/net-sircl` install), enables `fabric-table.service` and applies the relays.
-At boot the oneshot unit runs `apply --boot`, restoring missing objects and
-markers without removing anything. It does not continuously supervise markers.
+It also installs and starts `fabric-table-reconcile.timer`. Every 15 seconds
+after the preceding check finishes, the timer starts
+`fabric-table-reconcile.service`, which requests a reload of the retained
+fabric service, or starts it if inactive. Startup and reload both run
+`apply --boot --execute`, adding missing objects and markers without removing
+healthy state. Reload preserves existing marker processes. Failed checks are
+retried; inspect both services' journals when restoration is blocked.
 Addresses must be ready at `network-online.target`. If a separate service
 configures them later, order `fabric-table.service` after that service and
 require it through a systemd drop-in. Copying addresses into the facts file
 does not configure the interfaces. Missing addresses block restoration.
 
-Status: **unsupported** for automatic recovery of the entire group after a
-link reset. A reboot can remove routes and permanent neighbour entries on
-the still-running adjacent hosts. Their boot units do not run again. After
-the links and addresses are ready, apply the group table across all hosts
-with `--execute`, then require group verification before resuming traffic.
-The [DGX Spark validation record](dgx-spark-validation.md) separates successful
-local boot restoration from this group recovery requirement.
+Status: **implemented** for periodic recovery of missing local relay state.
+A reboot can remove routes and permanent neighbour entries on running
+adjacent hosts. Each host's timer reconciles its own table after links and
+addresses become ready. Recovery is asynchronous; require group verification
+before resuming a failed workload. It does not resume NCCL communicators or
+guarantee recovery while cabling, addresses or ownership conflict with facts.
+Source-specific hardware evidence is in the [qualification table](qualification.md).
 
 After reboot run `fabric verify --facts facts.json` from the workstation and
-`systemctl status fabric-table.service` on the restarted host. To disable
+inspect the fabric service and reconciliation timer on every host. To disable
 restoration run `sudo /usr/local/bin/fabric-tool remove-boot` locally, then
-repeat with `--execute`. This removes the unit and inputs but leaves live
-relays and the tool copy; use `remove` for live relays.
+repeat with `--execute`. This stops reconciliation and removes the units and
+inputs while leaving live relays, marker processes and the tool copy.
+Run `remove-boot --execute` before `remove` when retiring a table, otherwise
+the timer restores objects that removal deletes.
 
 ## Validation boundary
 

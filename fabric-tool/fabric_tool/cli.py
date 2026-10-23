@@ -315,6 +315,9 @@ def _command_install_boot(args: argparse.Namespace, topology: topology_mod.Topol
                      facts_text=json.dumps(facts_mod.load(args.facts), indent=1) + "\n")
     print(f"unit {boot.UNIT_NAME}:")
     print(spec.files[2][1], end="")
+    for destination, content in spec.files[3:]:
+        print(f"unit {destination}:")
+        print(content, end="")
     for destination, _ in spec.files[:2]:
         print(f"input: {destination}")
     if not args.execute:
@@ -342,12 +345,17 @@ def _command_install_boot(args: argparse.Namespace, topology: topology_mod.Topol
         wrapper.chmod(0o755)
         print(f"wrote {wrapper}")
     boot.install(spec, root=args.root, execute=True)
-    print(f"enabled {boot.UNIT_NAME}")
-    return _apply_flow(args, topology, "boot", executor)
+    print(f"enabled {boot.UNIT_NAME} and {boot.RECOVERY_TIMER}")
+    code = _apply_flow(args, topology, "boot", executor)
+    if code == 0 and args.root == "/":
+        subprocess.run(["systemctl", "start", boot.RECOVERY_TIMER], check=True)
+    return code
 
 
 def _command_remove_boot(args: argparse.Namespace) -> int:
-    removed = [f"/etc/systemd/system/{boot.UNIT_NAME}", boot.TOPOLOGY_INPUT, boot.FACTS_INPUT]
+    removed = [f"/etc/systemd/system/{name}" for name in
+               (boot.UNIT_NAME, boot.RECOVERY_SERVICE, boot.RECOVERY_TIMER)]
+    removed += [boot.TOPOLOGY_INPUT, boot.FACTS_INPUT]
     print("remove-boot deletes: " + ", ".join(removed) + "; the relay table itself stays until `remove`")
     if not args.execute:
         print("dry run: --execute removes them")

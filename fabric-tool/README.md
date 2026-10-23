@@ -50,8 +50,8 @@ The installed copy of that guide is under `share/doc/net-sircl/`.
 | `status` | Show owned and unowned objects |
 | `install-marker` | Preview/build `mesh_marker.c` on hosts, install root-owned at `/usr/local/libexec/fabric-tool/fabric-tool-marker` and record its SHA-256 |
 | `remove` | Preview/remove owned relay objects |
-| `install-boot` | Locally install `fabric-table.service`, tool copy and inputs, enable restoration and apply now |
-| `remove-boot` | Locally disable/remove the unit and inputs; leave live table and tool copy |
+| `install-boot` | Install the retained fabric service, periodic reconciliation service/timer, tool and inputs; apply now and start checks |
+| `remove-boot` | Stop reconciliation and remove units/inputs; leave live table, markers and tool copy |
 
 `apply`, `verify`, `remove`, `status` and `install-marker` act locally by default.
 With `--ssh`, supply one target for **every** topology host. Host names must match

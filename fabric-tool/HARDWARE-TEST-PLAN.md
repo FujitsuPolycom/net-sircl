@@ -82,10 +82,11 @@ Reboot one host; wait for addresses and the unit to become ready. Require
 `verify` to pass for every host and repeat a relayed traffic probe. Record the
 systemd journal and counters. Keep any other installer's restore disabled.
 Record local restoration separately from group verification. A carrier reset
-can remove adjacent hosts' routes and neighbours; boot-only units do not
-repair those running hosts. If group verification fails, preserve that result,
-reapply across the group under operator control, verify and repeat traffic.
-Successful traffic after that repair does not qualify automatic group recovery.
+can remove adjacent hosts' routes and neighbours. Require the periodic local
+checks to restore those entries without an operator apply. Record convergence
+time and verify that healthy marker PIDs remain unchanged across checks.
+If group verification fails, preserve that result before operator repair;
+successful traffic after repair does not qualify automatic group recovery.
 
 ## Remove and restore (about 10 minutes per ring)
 
