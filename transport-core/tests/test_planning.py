@@ -63,6 +63,17 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(self.lib.sircl_core_topology_parse(str(f).encode(), out, error, len(error)), -1)
         self.assertIn(b"too many cables", error.value)
 
+    def test_topology_rejects_ambiguous_ports_and_duplicate_hosts(self):
+        for text, expected in (
+                ("hosts a b c\ncabling explicit\ncable 0.port0 1.port1\ncable 0.port0 2.port1\n", b"port more than once"),
+                ("hosts a a\ncabling path\n", b"host twice")):
+            path = self.root / "invalid.topology"
+            path.write_text(text)
+            out = ctypes.create_string_buffer(16384)
+            error = ctypes.create_string_buffer(256)
+            self.assertEqual(self.lib.sircl_core_topology_parse(str(path).encode(), out, error, len(error)), -1)
+            self.assertIn(expected, error.value)
+
 
 if __name__ == "__main__":
     unittest.main()

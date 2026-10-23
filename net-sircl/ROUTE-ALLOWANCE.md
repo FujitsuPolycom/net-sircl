@@ -10,7 +10,7 @@ Let B be the effective base budget, at most 327680. Let U(q) contain each
 source/function whose routes traverse queue q. The weight w(a) is the sum of
 relay hops over source/function a's routes. The base allowance is
 `W0(a) = min_q floor64(B*w(a)/sum(w(b), b in U(q)))`. Therefore the sum of
-W0 over each queue's sources is at most B. `net_sircl_routes.h` reconstructs
+W0 over each queue's sources is at most B. `net_sircl_plan.c` reconstructs
 forward and reverse lanes independently and requires reciprocal paths.
 
 For reconstructable routes on 2-8 hosts, if every W0 is at least 1280, assign:

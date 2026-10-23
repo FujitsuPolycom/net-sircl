@@ -1,10 +1,6 @@
-/* The libibverbs entry points that SIRCL's native proxy and point-to-point
- * library call (proxy_hw.c, p2p_hw.c), resolved from libibverbs.so.1 at first use, so the library loads on hosts
- * without rdma-core and binds the process's own libibverbs where one is
- * loaded. Data-path calls (ibv_post_send, ibv_poll_cq) are inline in the
- * rdma-core header and dispatch through the device context; they need no
- * symbol. Every definition here is hidden: the library exports only the NCCL
- * API and its libsircl extension. */
+/* Optional hidden libibverbs loader for consumers without a link-time rdma-core dependency.
+ * Symbols resolve from libibverbs.so.1 on first use. Data-path inline calls dispatch through the
+ * device context. The net-sircl plugin links libibverbs directly and does not use this loader. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>

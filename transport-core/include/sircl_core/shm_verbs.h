@@ -1,8 +1,7 @@
 /* Control interface of the shared-memory verbs stand-in (shm_verbs.c).
  *
- * The stand-in implements the libibverbs subset that SIRCL's native proxy
- * uses (the declarations of fake_verbs/infiniband/verbs.h, renamed sccl_emu_*
- * by proxy_names.h) across processes of one host, so several processes, or
+ * The stand-in implements the libibverbs subset declared by the bundled
+ * emulation_verbs.h, renamed sccl_emu_* by legacy_proxy_names.h across processes of one host, so several processes, or
  * several threads of one process, act as the ranks of a group on one GPU.
  *
  * Fabric. One POSIX shared-memory segment (SIRCL_EMU_FABRIC, default
@@ -30,9 +29,8 @@
  * (flag lines) are release stores. A signaled or failed write leaves a
  * completion on the sender's completion queue.
  *
- * Diagnostics. sccl_emu_report() describes the queue pairs of this process and
- * the writes that failed; the library writes it into its link dumps
- * (LIBSIRCL_LINK_DUMP).
+ * Diagnostics. sccl_emu_report() describes local queue pairs and failed writes
+ * as bounded JSON for callers and tests.
  *
  * Settings read at attach: SIRCL_EMU_FABRIC (segment name), SIRCL_EMU_SEED
  * (interleaving seed, default 1), SIRCL_EMU_LATENCY_NS (each write executes no

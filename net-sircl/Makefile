@@ -16,7 +16,7 @@ PREFIX ?= /usr/local
 CFLAGS ?= -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread
 STANDIN := tests/standin
 CORE ?= $(firstword $(wildcard ../../transport-core ../transport-core))
-CORE_SOURCES := $(CORE)/src/core.c $(CORE)/src/topology.c $(CORE)/src/sysfs.c
+CORE_SOURCES := $(CORE)/src/core.c $(CORE)/src/topology.c $(CORE)/src/sysfs.c net_sircl_plan.c
 CORE_HEADERS := $(wildcard $(CORE)/include/sircl_core/*.h)
 CPPFLAGS += -I$(CORE)/include -include .core-build/core_identity.h
 
@@ -27,7 +27,7 @@ libnccl-net-sircl.so: net_sircl.c net_sircl.h net_sircl_profile.h $(wildcard ncc
 
 emu: libnccl-net-sircl-emu.so
 
-libnccl-net-sircl-emu.so: net_sircl.c net_sircl.h net_sircl_profile.h $(wildcard nccl/*.h) $(STANDIN)/shm_verbs.c VERSION $(CORE_SOURCES) $(CORE_HEADERS) $(CORE)/src/shm_verbs.c
+libnccl-net-sircl-emu.so: net_sircl.c net_sircl.h net_sircl_profile.h $(wildcard nccl/*.h) $(STANDIN)/shm_verbs.c VERSION $(CORE_SOURCES) $(CORE_HEADERS) $(CORE)/src/shm_verbs.c $(CORE)/src/shm_memory.c $(CORE)/src/shm_memory.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared -DNET_SIRCL_RELEASE='"$(VERSION)"' -DNET_SIRCL_STANDIN -I. \
 	  -I$(STANDIN)/fake_verbs -I$(STANDIN) net_sircl.c $(STANDIN)/shm_verbs.c $(CORE_SOURCES) -o $@
 
@@ -52,8 +52,8 @@ clean:
 .PHONY: all emu check install clean
 
 # The source digest covers transport-core sources, headers and tools, not the compiled library.
-.core-build/core_identity.h: $(wildcard $(CORE)/src/*.c) $(wildcard $(CORE)/include/*.h) $(wildcard $(CORE)/include/sircl_core/*) $(wildcard $(CORE)/tools/*.py) $(CORE)/VERSION
+.core-build/core_identity.h: $(wildcard $(CORE)/src/*.c $(CORE)/src/*.h) $(wildcard $(CORE)/include/*.h) $(wildcard $(CORE)/include/sircl_core/*) $(wildcard $(CORE)/tools/*.py) $(CORE)/VERSION
 	$(PYTHON) $(CORE)/tools/identity.py --output $@
-libnccl-net-sircl.so libnccl-net-sircl-emu.so: .core-build/core_identity.h net_sircl_compat.h net_sircl_routes.h net_sircl_tuner.h
+libnccl-net-sircl.so libnccl-net-sircl-emu.so: .core-build/core_identity.h net_sircl_compat.h net_sircl_plan.h net_sircl_tuner.h net_sircl_admission.h net_sircl_connection.h net_sircl_config.h
 
 CPPFLAGS += -DSIRCL_CORE_STATIC

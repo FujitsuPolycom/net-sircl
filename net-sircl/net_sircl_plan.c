@@ -1,12 +1,10 @@
-/* Static relay admission for the complete topology route set. See ROUTE-ALLOWANCE.md.
- * This is plugin policy, not a change to transport-core's route selection. */
-#ifndef NET_SIRCL_ROUTES_H
-#define NET_SIRCL_ROUTES_H
-
+/* Relay admission uses the complete validated topology, independent of device discovery. */
+#include "net_sircl_plan.h"
+#include <stdio.h>
+#include <string.h>
 #define ROUTE_MODEL_HOSTS 8
-#define ROUTE_FUNCTIONS 4
 
-static int route_function(const struct sircl_core_topology *t, const char *name) {
+int sircl_route_function(const struct sircl_core_topology *t, const char *name) {
   for (int f = 0; f < ROUTE_FUNCTIONS; ++f)
     if (!strcmp(t->fn[f / 2][f % 2], name)) return f;
   return -1;
@@ -14,7 +12,7 @@ static int route_function(const struct sircl_core_topology *t, const char *name)
 
 /* Return 1 only when every forward/reverse lane can be reconstructed exactly.
  * Otherwise retain the aggregate bound, including for larger topologies. */
-static int route_allowances(const struct sircl_core_topology *t, uint32_t budget,
+int sircl_route_allowances(const struct sircl_core_topology *t, uint32_t budget,
                             uint32_t caps[MAX_POSITIONS][ROUTE_FUNCTIONS]) {
   unsigned sources = t->nhosts > 2 ? (unsigned)t->nhosts - 2 : 1;
   uint32_t fallback = budget / sources / 64u * 64u;
@@ -46,7 +44,7 @@ static int route_allowances(const struct sircl_core_topology *t, uint32_t budget
       if (sircl_core_topology_route(t, s, d, fn, &relays) < 0) continue;
       if (sircl_core_topology_route(t, d, s, back, &reverse_relays) != 2 || reverse_relays != relays) return 0;
       for (int lane = 0; lane < 2; ++lane) {
-        int f = route_function(t, fn[lane]);
+        int f = sircl_route_function(t, fn[lane]);
         if (f < 0) return 0;
         int origin = s * ROUTE_FUNCTIONS + f, u = s, port = f / 2;
         weight[origin] += (unsigned)relays;
@@ -84,7 +82,7 @@ static int route_allowances(const struct sircl_core_topology *t, uint32_t budget
  * reverse ACK debt B/5. Both use the SAME source weights. Rounding only lowers
  * allowances. Tiny shares retain the aggregate policy for the whole topology:
  * every admitted source must be able to reserve a two-packet control pair. */
-static int split_allowances(const struct sircl_core_topology *t, int derived,
+int sircl_split_allowances(const struct sircl_core_topology *t, int derived,
                             uint32_t caps[MAX_POSITIONS][ROUTE_FUNCTIONS],
                             uint32_t ack[MAX_POSITIONS][ROUTE_FUNCTIONS]) {
   memset(ack, 0, MAX_POSITIONS * ROUTE_FUNCTIONS * sizeof(uint32_t));
@@ -99,4 +97,23 @@ static int split_allowances(const struct sircl_core_topology *t, int derived,
     }
   return 1;
 }
-#endif
+
+int sircl_route_plan_load(const char *path, uint32_t budget, unsigned wire,
+                          struct sircl_route_plan *plan, char *error, size_t len) {
+  memset(plan, 0, sizeof *plan);
+  struct sircl_core_topology *t = &plan->topology;
+  if (sircl_core_topology_parse(path, t, error, len)) return -1;
+  if (t->budget < 65536 || t->budget > 393216 || budget < 65536 || budget > 327680) {
+    snprintf(error, len, "relay_budget must be 65536..393216; effective budget ceiling 65536..327680");
+    return -1;
+  }
+  plan->budget = t->budget < budget ? t->budget : budget;
+  t->budget = plan->budget;
+  plan->derived = sircl_route_allowances(t, plan->budget, plan->caps);
+  sircl_split_allowances(t, plan->derived, plan->caps, plan->acks);
+  plan->policy = UINT64_C(14695981039346656037);
+  for (size_t i = 0; i < sizeof *t; ++i)
+    plan->policy = (plan->policy ^ ((const unsigned char *)t)[i]) * UINT64_C(1099511628211);
+  plan->policy = (plan->policy ^ wire) * UINT64_C(1099511628211);
+  return 0;
+}

@@ -1,5 +1,5 @@
-/* Shared-memory verbs stand-in: the libibverbs subset of SIRCL's native proxy
- * across the processes of one host. shm_verbs.h describes the model. */
+/* Shared-memory libibverbs subset for plugin CPU and single-host NCCL tests.
+ * sircl_core/shm_verbs.h describes its execution and memory model. */
 #define _GNU_SOURCE
 #ifndef SCCL_RENAME_VERBS
 #define SCCL_RENAME_VERBS 1
@@ -33,7 +33,6 @@
 #define SV_INLINE 16
 #define SV_LOCAL_QPS 1024
 #define SV_LOCAL_CQS 256
-#define SV_SEGMENTS 512
 
 /* -- shared registry --------------------------------------------------------------------------- */
 
@@ -163,13 +162,7 @@ int sccl_emu_attach(char *err, size_t err_len) {
 
 /* -- local state ------------------------------------------------------------------------------- */
 
-typedef struct {
-  char name[SV_NAME];
-  uint8_t *base;
-  size_t bytes;
-  int owned;
-  int used;
-} sv_segment;
+#include "shm_memory.h"
 
 typedef struct {
   struct ibv_cq cq;
@@ -202,8 +195,6 @@ typedef struct {
 } sv_lqp;
 
 static pthread_mutex_t local = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t segments_lock = PTHREAD_MUTEX_INITIALIZER;
-static sv_segment segments[SV_SEGMENTS];
 static sv_cq cqs[SV_LOCAL_CQS];
 static sv_lqp *qps[SV_LOCAL_QPS];
 static int nqps;
@@ -211,19 +202,23 @@ static uint32_t generations;
 static struct ibv_device devices[SV_MAX_DEVICES];
 static pthread_t executor;
 static int executor_running;
-static volatile int executor_stop;
-/* The executor's lifecycle (started by the first queue pair's create, stopped and joined by the last
- * destroy) is guarded on its own lock: create and destroy run concurrently, and a join that a new
- * create's thread can overtake loses the new executor (tests/test_shm_verbs.py's executor race). */
+static int executor_stop;
+/* Membership and worker transitions hold executor_lock before local. The worker only needs local.
+ * Joining releases local so the worker can retire; creators cannot publish until joining finishes. */
 static pthread_mutex_t executor_lock = PTHREAD_MUTEX_INITIALIZER;
-static int executor_users;
+#ifdef SIRCL_EMU_TEST_HOOKS
+extern void sircl_emu_test_hook(const char *event);
+#define EMU_HOOK(event) sircl_emu_test_hook(event)
+#else
+#define EMU_HOOK(event) ((void)0)
+#endif
 static uint64_t executed;
 
 /* Diagnostics (sccl_emu_report): the newest SV_ERRORS writes that did not succeed, and the completions the
  * stand-in could not deliver (a full completion queue; a queue pair destroyed while its write executed). */
 #define SV_ERRORS 64
 typedef struct {
-  uint64_t ns; /* CLOCK_REALTIME, the clock of the native proxy's event trace */
+  uint64_t ns; /* CLOCK_REALTIME nanoseconds for failed-write diagnostics */
   uint64_t wr_id, remote_addr;
   uint32_t qp_num, dest_qp_num, rkey, length;
   int32_t status, signaled, is_inline, peer_pid, peer_alive, delivered;
@@ -279,150 +274,14 @@ int sccl_emu_add_device(const char *name, const uint8_t gid[16]) {
  * time in clock ticks since boot (field 22 of /proc/self/stat, hexadecimal), so a process of another PID
  * namespace that reuses the pid (containers sharing the host's /dev/shm) names its segments otherwise;
  * SIRCL_EMU_SEGMENT_TAG (a test setting) replaces it. */
-static void segment_tag(char *out, size_t len) {
-  const char *tag = getenv("SIRCL_EMU_SEGMENT_TAG");
-  if (tag && *tag) {
-    snprintf(out, len, "%s", tag);
-    return;
-  }
-  unsigned long long start = 0;
-  char stat[1024] = {0};
-  FILE *f = fopen("/proc/self/stat", "r");
-  if (f) {
-    size_t n = fread(stat, 1, sizeof stat - 1, f);
-    stat[n] = 0;
-    fclose(f);
-    /* Field 2 (the command, in parentheses) may hold spaces: count fields after its closing parenthesis.
-     * Field 3 follows it; field 22 is the 20th after. */
-    char *p = strrchr(stat, ')');
-    for (int field = 3; p && *p && field <= 22; ++field) {
-      p = strchr(p + 1, ' ');
-      if (p && field == 22) start = strtoull(p + 1, NULL, 10);
-    }
-  }
-  snprintf(out, len, "%d-%llx", (int)getpid(), start);
-}
-
-void *sccl_emu_segment_alloc(size_t bytes, char *err, size_t err_len) {
-  if (!F) {
-    snprintf(err, err_len, "emulation fabric is not attached");
-    return NULL;
-  }
-  size_t page = (size_t)sysconf(_SC_PAGESIZE);
-  bytes = (bytes + page - 1) / page * page;
-  char tag[40], name[SV_NAME];
-  segment_tag(tag, sizeof tag);
-  /* A name that exists already belongs to a segment another process left (or holds): take the fabric's
-   * next serial instead. It is never unlinked here; its owner may live in another PID namespace. */
-  int fd = -1;
-  for (int attempt = 0; attempt < 64; ++attempt) {
-    fab_lock();
-    uint32_t serial = ++F->next_segment;
-    fab_unlock();
-    snprintf(name, sizeof name, "/sircl-emu-seg-%s-%u", tag, serial);
-    fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
-    if (fd >= 0 || errno != EEXIST) break;
-  }
-  if (fd < 0) {
-    snprintf(err, err_len, "emulation segment %s: shm_open: %s", name, strerror(errno));
-    return NULL;
-  }
-  if (ftruncate(fd, (off_t)bytes) != 0) {
-    snprintf(err, err_len, "emulation segment %s of %zu bytes: ftruncate: %s", name, bytes, strerror(errno));
-    close(fd);
-    shm_unlink(name);
-    return NULL;
-  }
-  void *base = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  close(fd);
-  if (base == MAP_FAILED) {
-    snprintf(err, err_len, "emulation segment %s: mmap: %s", name, strerror(errno));
-    shm_unlink(name);
-    return NULL;
-  }
-  pthread_mutex_lock(&segments_lock);
-  int slot = -1;
-  for (int i = 0; i < SV_SEGMENTS; ++i)
-    if (!segments[i].used) {
-      slot = i;
-      break;
-    }
-  if (slot < 0) {
-    pthread_mutex_unlock(&segments_lock);
-    munmap(base, bytes);
-    shm_unlink(name);
-    snprintf(err, err_len, "more than %d emulation segments in one process", SV_SEGMENTS);
-    return NULL;
-  }
-  snprintf(segments[slot].name, SV_NAME, "%s", name);
-  segments[slot].base = base;
-  segments[slot].bytes = bytes;
-  segments[slot].owned = 1;
-  segments[slot].used = 1;
-  pthread_mutex_unlock(&segments_lock);
-  return base;
-}
-
-void sccl_emu_segment_free(void *base) {
-  pthread_mutex_lock(&segments_lock);
-  for (int i = 0; i < SV_SEGMENTS; ++i) {
-    if (segments[i].used && segments[i].owned && segments[i].base == base) {
-      munmap(segments[i].base, segments[i].bytes);
-      shm_unlink(segments[i].name);
-      segments[i].used = 0;
-      break;
-    }
-  }
-  pthread_mutex_unlock(&segments_lock);
-}
-
 uint64_t sccl_emu_executed(void) { return __atomic_load_n(&executed, __ATOMIC_RELAXED); }
 
-/* The owned segment holding [addr, addr + length), or -1. */
-static int owned_segment(uint64_t addr, uint64_t length) {
-  for (int i = 0; i < SV_SEGMENTS; ++i) {
-    sv_segment *s = &segments[i];
-    uint64_t base = (uint64_t)(uintptr_t)s->base;
-    if (s->used && s->owned && addr >= base && addr + length <= base + s->bytes) return i;
-  }
-  return -1;
-}
-
-/* This process's mapping of the named segment, mapped on first use. */
-static uint8_t *mapped(const char *name, uint64_t *bytes) {
-  pthread_mutex_lock(&segments_lock);
-  for (int i = 0; i < SV_SEGMENTS; ++i) {
-    if (segments[i].used && !strcmp(segments[i].name, name)) {
-      uint8_t *base = segments[i].base;
-      *bytes = segments[i].bytes;
-      pthread_mutex_unlock(&segments_lock);
-      return base;
-    }
-  }
-  uint8_t *base = NULL;
-  int fd = shm_open(name, O_RDWR, 0600);
-  struct stat st;
-  if (fd >= 0 && fstat(fd, &st) == 0) {
-    void *p = mmap(NULL, (size_t)st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (p != MAP_FAILED) {
-      for (int i = 0; i < SV_SEGMENTS; ++i) {
-        if (!segments[i].used) {
-          snprintf(segments[i].name, SV_NAME, "%s", name);
-          segments[i].base = p;
-          segments[i].bytes = (size_t)st.st_size;
-          segments[i].owned = 0;
-          segments[i].used = 1;
-          base = p;
-          *bytes = (uint64_t)st.st_size;
-          break;
-        }
-      }
-      if (!base) munmap(p, (size_t)st.st_size);
-    }
-  }
-  if (fd >= 0) close(fd);
-  pthread_mutex_unlock(&segments_lock);
-  return base;
+uint32_t sircl_emu_next_segment(void) {
+  if (!F) return 0;
+  fab_lock();
+  uint32_t serial = ++F->next_segment;
+  fab_unlock();
+  return serial;
 }
 
 /* -- execution --------------------------------------------------------------------------------- */
@@ -561,7 +420,7 @@ static int execute_one(void) {
   uint32_t generation = q->generation;
   int errored = q->errored;
   sv_lqp snapshot = *q;
-  pthread_mutex_unlock(&local);
+  /* Keep QP ownership until the source read and completion have retired. */
 
   enum ibv_wc_status status = IBV_WC_WR_FLUSH_ERR;
   char segment[SV_NAME];
@@ -575,20 +434,20 @@ static int execute_one(void) {
     fab_unlock();
   }
   if (status == IBV_WC_SUCCESS) {
-    uint64_t bytes = 0;
-    uint8_t *base = mapped(segment, &bytes);
-    if (!base || seg_offset + w.length > bytes) {
+    sv_segment *mapping = sircl_emu_mapping_acquire(segment);
+    EMU_HOOK("executing");
+    if (!mapping || seg_offset > mapping->bytes || w.length > mapping->bytes - seg_offset) {
       status = IBV_WC_REM_ACCESS_ERR;
       snprintf(reason, sizeof reason, "destination segment %s is not mapped or is shorter than offset %llu + %u",
                segment, (unsigned long long)seg_offset, w.length);
     } else {
-      apply(base + seg_offset, source, w.length);
+      apply(mapping->base + seg_offset, source, w.length);
     }
+    if (mapping) sircl_emu_mapping_release(mapping);
   }
   int peer_alive = status != IBV_WC_SUCCESS && peer_pid ? pid_alive(peer_pid) : 0;
   uint64_t when = status != IBV_WC_SUCCESS ? realtime_ns() : 0;
   __atomic_fetch_add(&executed, 1, __ATOMIC_RELAXED);
-  pthread_mutex_lock(&local);
   int delivered = 0, wants = w.signaled || status != IBV_WC_SUCCESS;
   if (qps[index] == q && q->generation == generation) {
     if (status != IBV_WC_SUCCESS) q->errored = 1;
@@ -670,7 +529,7 @@ static void *executor_main(void *arg) {
   (void)arg;
   const struct timespec nap = {0, 10000};
   unsigned idle = 0;
-  while (!executor_stop) {
+  while (!__atomic_load_n(&executor_stop, __ATOMIC_ACQUIRE)) {
     if (execute_one()) {
       idle = 0;
       continue;
@@ -771,17 +630,10 @@ int ibv_dealloc_pd(struct ibv_pd *pd) {
 }
 
 struct ibv_mr *ibv_reg_mr(struct ibv_pd *pd, void *addr, size_t length, int access) {
-  pthread_mutex_lock(&segments_lock);
-  int s = owned_segment((uint64_t)(uintptr_t)addr, length);
   char name[SV_NAME] = {0};
   uint64_t offset = 0;
-  if (s >= 0) {
-    snprintf(name, sizeof name, "%s", segments[s].name);
-    offset = (uint64_t)(uintptr_t)addr - (uint64_t)(uintptr_t)segments[s].base;
-  }
-  pthread_mutex_unlock(&segments_lock);
-  if (s < 0) {
-    errno = EINVAL; /* only memory from sccl_emu_segment_alloc can be registered */
+  if (!sircl_emu_owned_segment((uint64_t)(uintptr_t)addr, length, name, sizeof name, &offset)) {
+    errno = EINVAL;
     return NULL;
   }
   struct ibv_mr *mr = calloc(1, sizeof *mr);
@@ -885,6 +737,8 @@ struct ibv_qp *ibv_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *attr) {
     errno = ENOMEM;
     return NULL;
   }
+  EMU_HOOK("create_waiting");
+  pthread_mutex_lock(&executor_lock);
   q->capacity = (int)attr->cap.max_send_wr;
   q->device = pd->context->fv_index;
   fab_lock();
@@ -921,6 +775,7 @@ struct ibv_qp *ibv_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *attr) {
     }
     free(q->queue);
     free(q);
+    pthread_mutex_unlock(&executor_lock);
     errno = ENOMEM;
     return NULL;
   }
@@ -934,14 +789,15 @@ struct ibv_qp *ibv_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *attr) {
   q->qp.fv_index = slot;
   qps[slot] = q;
   nqps++;
-  executor_users++;
   pthread_mutex_unlock(&local);
-  pthread_mutex_lock(&executor_lock);
+  int start_error = 0;
   if (!executor_running) {
-    executor_stop = 0;
-    if (pthread_create(&executor, NULL, executor_main, NULL) == 0) executor_running = 1;
+    __atomic_store_n(&executor_stop, 0, __ATOMIC_RELEASE);
+    start_error = pthread_create(&executor, NULL, executor_main, NULL);
+    if (!start_error) executor_running = 1;
   }
   pthread_mutex_unlock(&executor_lock);
+  if (start_error) { ibv_destroy_qp(&q->qp); errno = start_error; return NULL; }
   return &q->qp;
 }
 
@@ -985,24 +841,25 @@ int ibv_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask) {
 }
 
 int ibv_destroy_qp(struct ibv_qp *qp) {
+  EMU_HOOK("retire_waiting");
+  pthread_mutex_lock(&executor_lock);
+  EMU_HOOK("retire_locked");
   pthread_mutex_lock(&local);
   sv_lqp *q = qps[qp->fv_index];
   qps[qp->fv_index] = NULL;
-  nqps--;
-  int left = --executor_users;
+  int left = --nqps;
   pthread_mutex_unlock(&local);
-  pthread_mutex_lock(&executor_lock);
-  if (left == 0 && executor_running) {
-    executor_stop = 1;
-    executor_running = 0;
+  if (!left && executor_running) {
+    __atomic_store_n(&executor_stop, 1, __ATOMIC_RELEASE);
     pthread_join(executor, NULL);
+    executor_running = 0;
   }
-  pthread_mutex_unlock(&executor_lock);
   fab_lock();
   F->qp[q->shared].used = 0;
   fab_unlock();
   free(q->queue);
   free(q);
+  pthread_mutex_unlock(&executor_lock);
   return 0;
 }
 
