@@ -110,3 +110,31 @@ def test_systemd_enable_failure_is_not_success(tmp_path, monkeypatch):
         boot.install(spec, execute=True)
     assert calls == [["systemctl", "daemon-reload"],
                      ["systemctl", "enable", boot.UNIT_NAME, boot.RECOVERY_TIMER]]
+
+
+def test_removal_keeps_inputs_until_the_manager_job_is_idle(tmp_path, monkeypatch):
+    from pathlib import Path
+    import subprocess
+
+    spec = boot.plan('topology', 'facts', topology_text='hosts a b\n', facts_text='{}')
+    boot.install(spec, root=str(tmp_path), execute=False)
+    files = [tmp_path / name.lstrip('/') for name, _ in spec.files]
+    states = iter(['ActiveState=active\nJob=42\n', 'ActiveState=reloading\nJob=42\n',
+                   'ActiveState=active\nJob=\n'])
+    observations = []
+
+    def systemctl(argv, **kwargs):
+        output = ''
+        if argv[1] == 'show':
+            assert all(path.exists() for path in files)
+            output = next(states)
+            observations.append(output)
+        return subprocess.CompletedProcess(argv, 0, stdout=output)
+
+    monkeypatch.setattr(boot, 'Path', lambda value: tmp_path / str(value).lstrip('/')
+                        if str(value).startswith('/') else Path(value))
+    monkeypatch.setattr(boot.subprocess, 'run', systemctl)
+    monkeypatch.setattr(boot.time, 'sleep', lambda _: None)
+    boot.remove(execute=True)
+    assert len(observations) == 3
+    assert not any(path.exists() for path in files)

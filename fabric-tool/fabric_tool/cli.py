@@ -335,6 +335,8 @@ def _command_install_boot(args: argparse.Namespace, topology: topology_mod.Topol
         _print_outcome(outcome, args, scripts=False)
         return 3
     if args.root == "/":
+        if Path(f"/etc/systemd/system/{boot.RECOVERY_TIMER}").exists():
+            boot.stop_reconciliation()
         source = Path(__file__).resolve().parents[1]
         target = Path(boot.LIB_DIR)
         if target.resolve() != source.resolve():

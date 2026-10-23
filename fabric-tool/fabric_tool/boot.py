@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from . import commands, model
@@ -146,14 +147,36 @@ def install(spec: BootPlan, *, root: str = "/", execute: bool) -> list[str]:
     return written
 
 
+def _wait_for_restoration() -> None:
+    """A stopped systemctl client can leave its manager-side reload job running."""
+    deadline = time.monotonic() + 330
+    while True:
+        result = subprocess.run(["systemctl", "show", UNIT_NAME, "--property=ActiveState", "--property=Job"],
+                                check=True, capture_output=True, text=True, timeout=10)
+        state = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if state.get("ActiveState") not in ("activating", "reloading") and state.get("Job") in ("", "0"):
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("fabric restoration is still running; boot inputs were retained")
+        time.sleep(0.1)
+
+
+def stop_reconciliation() -> None:
+    """Stop scheduling and wait for restoration before changing its code or inputs."""
+    if Path(f"/etc/systemd/system/{RECOVERY_TIMER}").exists():
+        subprocess.run(["systemctl", "stop", RECOVERY_TIMER], check=True)
+    if Path(f"/etc/systemd/system/{RECOVERY_SERVICE}").exists():
+        subprocess.run(["systemctl", "stop", RECOVERY_SERVICE], check=True)
+    _wait_for_restoration()
+
+
 def remove(*, root: str = "/", execute: bool) -> list[str]:
     """Remove the unit and the copied inputs; with ``root`` (tests) under that directory."""
     removed = []
     if root == "/" and execute:
+        stop_reconciliation()
         if Path(f"/etc/systemd/system/{RECOVERY_TIMER}").exists():
-            subprocess.run(["systemctl", "disable", "--now", RECOVERY_TIMER], check=True)
-        if Path(f"/etc/systemd/system/{RECOVERY_SERVICE}").exists():
-            subprocess.run(["systemctl", "stop", RECOVERY_SERVICE], check=True)
+            subprocess.run(["systemctl", "disable", RECOVERY_TIMER], check=True)
         subprocess.run(["systemctl", "disable", UNIT_NAME], check=True)
     for destination in (f"/etc/systemd/system/{UNIT_NAME}", f"/etc/systemd/system/{RECOVERY_SERVICE}",
                         f"/etc/systemd/system/{RECOVERY_TIMER}", TOPOLOGY_INPUT, FACTS_INPUT):
