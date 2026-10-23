@@ -27,8 +27,36 @@ BIN_PATH = "/usr/local/bin/fabric-tool"
 DEFAULT_TOOL = BIN_PATH
 
 
-def unit_text(tool: str = DEFAULT_TOOL) -> str:
+@dataclasses.dataclass(frozen=True)
+class RestoreInvocation:
+    """Behavior persisted by the boot unit and used by immediate restoration."""
+
+    tool: str = DEFAULT_TOOL
+    marker: str = commands.DEFAULT_MARKER
+    max_relays: int = 3
+    host: str | None = None
+    skip_hostname_check: bool = False
+
+    def argv(self) -> tuple[str, ...]:
+        args = (self.tool, "apply", "--boot", "--execute", "--topology", TOPOLOGY_INPUT,
+                "--facts", FACTS_INPUT, "--marker", self.marker, "--max-relays", str(self.max_relays))
+        if self.host:
+            args += ("--host", self.host)
+        if self.skip_hostname_check:
+            args += ("--skip-hostname-check",)
+        return args
+
+
+def systemd_arg(value: str) -> str:
+    """Quote one ExecStart argument, including systemd specifier and variable expansion."""
+    if any(ord(c) < 32 for c in value):
+        raise ValueError("service arguments must not contain control characters")
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$') + '"'
+
+
+def unit_text(tool: str = DEFAULT_TOOL, *, invocation: RestoreInvocation | None = None) -> str:
     """The unit file of ``fabric-table.service``."""
+    invocation = invocation or RestoreInvocation(tool=tool)
     return "\n".join([
         "[Unit]",
         "Description=Fabric relay table of directly cabled DGX Sparks (fabric-tool)",
@@ -38,7 +66,7 @@ def unit_text(tool: str = DEFAULT_TOOL) -> str:
         "",
         "[Service]",
         "Type=oneshot",
-        f"ExecStart={tool} apply --boot --topology {TOPOLOGY_INPUT} --facts {FACTS_INPUT}",
+        "ExecStart=" + " ".join(systemd_arg(arg) for arg in invocation.argv()),
         "RemainAfterExit=yes",
         "",
         "[Install]",
@@ -70,13 +98,15 @@ class BootPlan:
         return ("systemctl daemon-reload", f"systemctl enable {UNIT_NAME}")
 
 
-def plan(topology_path: str, facts_path: str, tool: str = DEFAULT_TOOL) -> BootPlan:
+def plan(topology_path: str, facts_path: str, tool: str = DEFAULT_TOOL, *,
+         invocation: RestoreInvocation | None = None, topology_text: str | None = None,
+         facts_text: str | None = None) -> BootPlan:
     """The unit and input files of an ``install-boot`` (the caller passes validated inputs)."""
-    topology = Path(topology_path).read_text(encoding="utf-8")
-    facts = Path(facts_path).read_text(encoding="utf-8")
+    topology = topology_text if topology_text is not None else Path(topology_path).read_text(encoding="utf-8")
+    facts = facts_text if facts_text is not None else Path(facts_path).read_text(encoding="utf-8")
     return BootPlan(topology_path, facts_path, UNIT_NAME,
                     ((TOPOLOGY_INPUT, topology), (FACTS_INPUT, facts), (f"/etc/systemd/system/{UNIT_NAME}",
-                                                                       unit_text(tool))))
+                                                                       unit_text(tool, invocation=invocation))))
 
 
 def install(spec: BootPlan, *, root: str = "/", execute: bool) -> list[str]:

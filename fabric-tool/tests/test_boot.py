@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from fabric_tool import boot
 from fabric_tool import cli
+import shlex
 
 
 def test_unit_text():
     text = boot.unit_text()
     assert text.startswith("[Unit]")
     assert "After=network-online.target" in text
-    assert f"ExecStart={boot.DEFAULT_TOOL} apply --boot --topology {boot.TOPOLOGY_INPUT} " \
-           f"--facts {boot.FACTS_INPUT}" in text
+    argv = shlex.split(next(line.removeprefix("ExecStart=") for line in text.splitlines()
+                            if line.startswith("ExecStart=")))
+    assert argv == list(boot.RestoreInvocation().argv())
+    assert "--execute" in argv
     assert "WantedBy=multi-user.target" in text
 
 

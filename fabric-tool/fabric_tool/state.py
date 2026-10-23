@@ -422,6 +422,7 @@ class HostState:
     name: str
     ssh: str
     reachable: bool
+    bindings: model.FabricBindings = model.DEFAULT_BINDINGS
     error: str = ""
     hostname: str = ""
     versions: str = ""
@@ -455,7 +456,7 @@ class HostState:
             return None
 
     def ports(self) -> tuple[Port, ...]:
-        return tuple(port for port in (self.port(netdev) for netdev in model.FABRIC_NETDEVS) if port is not None)
+        return tuple(port for port in (self.port(netdev) for netdev in self.bindings.netdevs) if port is not None)
 
     def fact_problems(self, *, check_hostname: bool = True) -> list[str]:
         if not self.reachable:
@@ -464,11 +465,11 @@ class HostState:
         if check_hostname and self.hostname != self.name:
             problems.append(f"{self.name}: the host at {self.ssh} is named {self.hostname or 'nothing'}, the "
                             "topology lists it as " + self.name)
-        for device, netdev in zip(model.RDMA_DEVICES, model.FABRIC_NETDEVS):
+        for device, netdev in zip(self.bindings.devices, self.bindings.netdevs):
             if self.rdma.get(device) != netdev:
                 problems.append(f"{self.name}: RDMA device {device} belongs to network device "
                                 f"{self.rdma.get(device) or 'none'}, expected {netdev}")
-        for netdev in model.FABRIC_NETDEVS:
+        for netdev in self.bindings.netdevs:
             link = self.links.get(netdev)
             if link is None:
                 problems.append(f"{self.name}: network device {netdev} is missing")
@@ -491,7 +492,7 @@ class HostState:
         return any(value in network for network in link.networks())
 
     def is_relay_route(self, route: RouteEntry) -> bool:
-        return (route.prefixlen == 32 and route.dev in model.FABRIC_NETDEVS and route.scope == "link"
+        return (route.prefixlen == 32 and route.dev in self.bindings.netdevs and route.scope == "link"
                 and not route.gateway and route.kind == "unicast" and not self.on_link(route.dev, route.destination))
 
     def relay_routes(self) -> list[RouteEntry]:
@@ -499,7 +500,7 @@ class HostState:
         return [route for route in self.routes if route.owned or self.is_relay_route(route)]
 
     def is_relay_neighbour(self, neighbour: NeighbourEntry) -> bool:
-        return (neighbour.permanent and neighbour.dev in model.FABRIC_NETDEVS
+        return (neighbour.permanent and neighbour.dev in self.bindings.netdevs
                 and (neighbour.owned or not self.on_link(neighbour.dev, neighbour.destination)))
 
     def relay_neighbours(self) -> list[NeighbourEntry]:
@@ -510,7 +511,7 @@ class HostState:
 
     def foreign_tag_filters(self) -> list[FilterEntry]:
         """Filters outside the reserved preferences that match a relay tag (they could take relayed frames)."""
-        return [entry for netdev in model.FABRIC_NETDEVS for entry in self.filters.get(netdev, [])
+        return [entry for netdev in self.bindings.netdevs for entry in self.filters.get(netdev, [])
                 if not entry.reserved and entry.protocol is not None and entry.protocol != ETH_P_IP
                 and relays_left(entry.protocol)]
 
@@ -546,9 +547,9 @@ def _parse_record(text: str, schema: str, problems: list[str], what: str) -> dic
         return None
 
 
-def parse(position: int, name: str, ssh: str, *, returncode: int, stdout: str, stderr: str) -> HostState:
+def parse(position: int, name: str, ssh: str, *, returncode: int, stdout: str, stderr: str, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> HostState:
     """The :class:`HostState` of one host from its read script's output."""
-    state = HostState(position, name, ssh, reachable=True)
+    state = HostState(position, name, ssh, reachable=True, bindings=bindings)
     sections = parse_sections(stdout)
     if "end" not in sections:
         state.reachable = bool(sections)
@@ -563,12 +564,12 @@ def parse(position: int, name: str, ssh: str, *, returncode: int, stdout: str, s
     state.hostname = raw.get("hostname", "").strip()
     state.versions = " | ".join(line.strip() for line in raw.get("versions", "").splitlines() if line.strip())
     state.links = parse_links(raw.get("links", ""), problems)
-    for device in model.RDMA_DEVICES:
+    for device in bindings.devices:
         netdevs = raw.get(f"rdma:{device}", "").split()
         state.rdma[device] = netdevs[0] if netdevs else ""
     state.routes = parse_routes(raw.get("routes", ""), problems)
     state.neighbours = parse_neighbours(raw.get("neighbours", ""), problems)
-    for netdev in model.FABRIC_NETDEVS:
+    for netdev in bindings.netdevs:
         state.ingress_qdisc[netdev] = parse_ingress_qdisc(raw.get(f"qdisc:{netdev}", ""), problems, netdev)
         state.filters[netdev] = parse_filters(raw.get(f"filters:{netdev}", ""), problems, netdev)
     state.markers = parse_markers(raw.get("markers", ""))
@@ -577,7 +578,7 @@ def parse(position: int, name: str, ssh: str, *, returncode: int, stdout: str, s
     recorded = raw.get("marker-record", "").strip()
     state.marker_recorded = recorded if len(recorded) == 64 and set(recorded) <= set("0123456789abcdef") else None
     state.marker_owners = parse_owners(raw.get("marker-owners", ""))
-    for device in model.RDMA_DEVICES:
+    for device in bindings.devices:
         text = raw.get(f"marker-log:{device}", "").strip()
         first = text.splitlines()[0] if text else ""
         try:
