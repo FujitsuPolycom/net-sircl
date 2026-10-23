@@ -1760,5 +1760,24 @@
     "wait_seconds": 3.48,
     "marker_preserved": true,
     "pending_job_completed_before_input_removal": true
+  },
+  "raw_protocol_control_artifacts": {
+    "emulator_source_revision": "ddc39fa07cd57010769a77094d0a6aad1efb9fbb",
+    "emulator_library_sha256": "87e663b629639d2d1fefdbf0ca1e787f3d497503f5fd99fe16effb4469e9b705",
+    "native_probe_source_sha256": "b3d9d2008cdc8d9a2a12b7069f5347607c2da735863e5fc40fdfd824f82c49bb",
+    "native_probe_conditions": {
+      "ranks": 4,
+      "gpu_devices": 1,
+      "datatype": "uint32",
+      "sizes_bytes": [
+        8192,
+        4194304,
+        67108864
+      ],
+      "channels": 4,
+      "algorithm": "Ring",
+      "nccl_host_memory_allocation": "NCCL_CUMEM_HOST_ENABLE=0",
+      "p2p_and_shm_transports": "disabled"
+    }
   }
 }
