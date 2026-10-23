@@ -1,0 +1,1764 @@
+{
+  "schema": "net-sircl-recovery-validation/v1",
+  "measured_date": "2026-10-23",
+  "source_revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+  "production_plugin_sha256": "a2f33a58b2a1f3ab6e8d1b328de4c57b087785236651075ad3e59e6545c9ee14",
+  "nccl_version": "2.32.3",
+  "nccl_library_sha256": "c77f5ced2c4b538aad2b0ab88a9838e9eac9a68e22017863ffb0cff9c4f58745",
+  "conditions": {
+    "hosts": 4,
+    "gpu": "NVIDIA GB10",
+    "cabling": "path",
+    "timer_inactive_interval_seconds": 15,
+    "independent_address_service": true,
+    "collectives": [
+      "all_reduce",
+      "all_gather",
+      "reduce_scatter",
+      "broadcast"
+    ],
+    "modes": [
+      "eager",
+      "graph"
+    ],
+    "sizes_bytes": [
+      8192,
+      268435456
+    ],
+    "size_multiplier": 2,
+    "warmups": 2,
+    "iterations": 5,
+    "graph_replays": 20,
+    "clock_policy": "not fixed; throughput qualification excluded"
+  },
+  "reboot": {
+    "source": "748142fb36850fb097454e4b4c01cf1b3070461e",
+    "boot_identity_changed": true,
+    "administration_return_seconds": 125.77,
+    "group_convergence_seconds": 126.76,
+    "verification_exits": [
+      0
+    ],
+    "operator_repair": false,
+    "unaffected_marker_pids_preserved": true,
+    "serving_health_http": 200
+  },
+  "injected_loss": {
+    "route_and_neighbor_removed": true,
+    "operator_repair": false,
+    "convergence_seconds": 12.88,
+    "verification_exits": [
+      1,
+      1,
+      1,
+      1,
+      0
+    ]
+  },
+  "physical": {
+    "before-reboot": {
+      "layout": "four_host_path",
+      "cases": 8,
+      "passed": true,
+      "counter_deltas": {},
+      "missing_counters": {
+        "0": [],
+        "1": [],
+        "2": [],
+        "3": [],
+        "4": [],
+        "5": [],
+        "6": [],
+        "7": []
+      },
+      "measurements": [
+        {
+          "exit": 0,
+          "seconds": 5.45,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "67108864",
+              "bfloat16",
+              "sum",
+              "-1",
+              "14007.5",
+              "9.58",
+              "14.37",
+              "0",
+              "13968.2",
+              "9.61",
+              "14.41",
+              "0"
+            ],
+            [
+              "268435456",
+              "134217728",
+              "bfloat16",
+              "sum",
+              "-1",
+              "28024.2",
+              "9.58",
+              "14.37",
+              "0",
+              "28138.4",
+              "9.54",
+              "14.31",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "all_reduce",
+          "mode": "eager"
+        },
+        {
+          "exit": 0,
+          "seconds": 17.36,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "67108864",
+              "bfloat16",
+              "sum",
+              "-1",
+              "13972.2",
+              "9.61",
+              "14.41",
+              "0",
+              "13991.6",
+              "9.59",
+              "14.39",
+              "0"
+            ],
+            [
+              "268435456",
+              "134217728",
+              "bfloat16",
+              "sum",
+              "-1",
+              "28571.9",
+              "9.40",
+              "14.09",
+              "0",
+              "28589.8",
+              "9.39",
+              "14.08",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "all_reduce",
+          "mode": "graph"
+        },
+        {
+          "exit": 0,
+          "seconds": 4.98,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "16777216",
+              "bfloat16",
+              "none",
+              "-1",
+              "7286.39",
+              "18.42",
+              "13.82",
+              "0",
+              "7318.91",
+              "18.34",
+              "13.75",
+              "0"
+            ],
+            [
+              "268435456",
+              "33554432",
+              "bfloat16",
+              "none",
+              "-1",
+              "14345.0",
+              "18.71",
+              "14.03",
+              "0",
+              "14354.7",
+              "18.70",
+              "14.03",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "all_gather",
+          "mode": "eager"
+        },
+        {
+          "exit": 0,
+          "seconds": 11.28,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "16777216",
+              "bfloat16",
+              "none",
+              "-1",
+              "7299.90",
+              "18.39",
+              "13.79",
+              "0",
+              "7196.97",
+              "18.65",
+              "13.99",
+              "0"
+            ],
+            [
+              "268435456",
+              "33554432",
+              "bfloat16",
+              "none",
+              "-1",
+              "14701.9",
+              "18.26",
+              "13.69",
+              "0",
+              "14502.9",
+              "18.51",
+              "13.88",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "all_gather",
+          "mode": "graph"
+        },
+        {
+          "exit": 0,
+          "seconds": 4.9,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "16777216",
+              "bfloat16",
+              "sum",
+              "-1",
+              "6888.75",
+              "19.48",
+              "14.61",
+              "0",
+              "7072.31",
+              "18.98",
+              "14.23",
+              "0"
+            ],
+            [
+              "268435456",
+              "33554432",
+              "bfloat16",
+              "sum",
+              "-1",
+              "13736.0",
+              "19.54",
+              "14.66",
+              "0",
+              "13637.1",
+              "19.68",
+              "14.76",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "reduce_scatter",
+          "mode": "eager"
+        },
+        {
+          "exit": 0,
+          "seconds": 11.35,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "16777216",
+              "bfloat16",
+              "sum",
+              "-1",
+              "6716.08",
+              "19.98",
+              "14.99",
+              "0",
+              "6727.83",
+              "19.95",
+              "14.96",
+              "0"
+            ],
+            [
+              "268435456",
+              "33554432",
+              "bfloat16",
+              "sum",
+              "-1",
+              "13760.0",
+              "19.51",
+              "14.63",
+              "0",
+              "13777.4",
+              "19.48",
+              "14.61",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "reduce_scatter",
+          "mode": "graph"
+        },
+        {
+          "exit": 0,
+          "seconds": 4.85,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "67108864",
+              "bfloat16",
+              "none",
+              "0",
+              "6140.87",
+              "21.86",
+              "21.86",
+              "0",
+              "6207.79",
+              "21.62",
+              "21.62",
+              "0"
+            ],
+            [
+              "268435456",
+              "134217728",
+              "bfloat16",
+              "none",
+              "0",
+              "11729.5",
+              "22.89",
+              "22.89",
+              "0",
+              "11760.9",
+              "22.82",
+              "22.82",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "broadcast",
+          "mode": "eager"
+        },
+        {
+          "exit": 0,
+          "seconds": 9.8,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "67108864",
+              "bfloat16",
+              "none",
+              "0",
+              "5795.93",
+              "23.16",
+              "23.16",
+              "0",
+              "5792.46",
+              "23.17",
+              "23.17",
+              "0"
+            ],
+            [
+              "268435456",
+              "134217728",
+              "bfloat16",
+              "none",
+              "0",
+              "11276.2",
+              "23.81",
+              "23.81",
+              "0",
+              "11268.2",
+              "23.82",
+              "23.82",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "broadcast",
+          "mode": "graph"
+        }
+      ]
+    },
+    "after-reboot": {
+      "layout": "four_host_path",
+      "cases": 8,
+      "passed": true,
+      "counter_deltas": {},
+      "missing_counters": {
+        "0": [],
+        "1": [],
+        "2": [],
+        "3": [],
+        "4": [],
+        "5": [],
+        "6": [],
+        "7": []
+      },
+      "measurements": [
+        {
+          "exit": 0,
+          "seconds": 5.44,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "67108864",
+              "bfloat16",
+              "sum",
+              "-1",
+              "13699.3",
+              "9.80",
+              "14.70",
+              "0",
+              "13894.8",
+              "9.66",
+              "14.49",
+              "0"
+            ],
+            [
+              "268435456",
+              "134217728",
+              "bfloat16",
+              "sum",
+              "-1",
+              "28013.0",
+              "9.58",
+              "14.37",
+              "0",
+              "28721.3",
+              "9.35",
+              "14.02",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "all_reduce",
+          "mode": "eager"
+        },
+        {
+          "exit": 0,
+          "seconds": 16.81,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "67108864",
+              "bfloat16",
+              "sum",
+              "-1",
+              "13718.7",
+              "9.78",
+              "14.68",
+              "0",
+              "13647.5",
+              "9.83",
+              "14.75",
+              "0"
+            ],
+            [
+              "268435456",
+              "134217728",
+              "bfloat16",
+              "sum",
+              "-1",
+              "28130.0",
+              "9.54",
+              "14.31",
+              "0",
+              "28137.1",
+              "9.54",
+              "14.31",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "all_reduce",
+          "mode": "graph"
+        },
+        {
+          "exit": 0,
+          "seconds": 4.83,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "16777216",
+              "bfloat16",
+              "none",
+              "-1",
+              "7115.66",
+              "18.86",
+              "14.15",
+              "0",
+              "7061.59",
+              "19.01",
+              "14.26",
+              "0"
+            ],
+            [
+              "268435456",
+              "33554432",
+              "bfloat16",
+              "none",
+              "-1",
+              "14295.0",
+              "18.78",
+              "14.08",
+              "0",
+              "13942.5",
+              "19.25",
+              "14.44",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "all_gather",
+          "mode": "eager"
+        },
+        {
+          "exit": 0,
+          "seconds": 10.79,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "16777216",
+              "bfloat16",
+              "none",
+              "-1",
+              "6958.90",
+              "19.29",
+              "14.47",
+              "0",
+              "6826.41",
+              "19.66",
+              "14.75",
+              "0"
+            ],
+            [
+              "268435456",
+              "33554432",
+              "bfloat16",
+              "none",
+              "-1",
+              "14066.5",
+              "19.08",
+              "14.31",
+              "0",
+              "14018.5",
+              "19.15",
+              "14.36",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "all_gather",
+          "mode": "graph"
+        },
+        {
+          "exit": 0,
+          "seconds": 4.37,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "16777216",
+              "bfloat16",
+              "sum",
+              "-1",
+              "6825.08",
+              "19.67",
+              "14.75",
+              "0",
+              "6577.78",
+              "20.40",
+              "15.30",
+              "0"
+            ],
+            [
+              "268435456",
+              "33554432",
+              "bfloat16",
+              "sum",
+              "-1",
+              "13873.1",
+              "19.35",
+              "14.51",
+              "0",
+              "13638.2",
+              "19.68",
+              "14.76",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "reduce_scatter",
+          "mode": "eager"
+        },
+        {
+          "exit": 0,
+          "seconds": 11.37,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "16777216",
+              "bfloat16",
+              "sum",
+              "-1",
+              "6615.22",
+              "20.29",
+              "15.22",
+              "0",
+              "6621.40",
+              "20.27",
+              "15.20",
+              "0"
+            ],
+            [
+              "268435456",
+              "33554432",
+              "bfloat16",
+              "sum",
+              "-1",
+              "13693.6",
+              "19.60",
+              "14.70",
+              "0",
+              "13664.0",
+              "19.65",
+              "14.73",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "reduce_scatter",
+          "mode": "graph"
+        },
+        {
+          "exit": 0,
+          "seconds": 4.33,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "67108864",
+              "bfloat16",
+              "none",
+              "0",
+              "5998.98",
+              "22.37",
+              "22.37",
+              "0",
+              "6002.32",
+              "22.36",
+              "22.36",
+              "0"
+            ],
+            [
+              "268435456",
+              "134217728",
+              "bfloat16",
+              "none",
+              "0",
+              "11458.5",
+              "23.43",
+              "23.43",
+              "0",
+              "11494.4",
+              "23.35",
+              "23.35",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "broadcast",
+          "mode": "eager"
+        },
+        {
+          "exit": 0,
+          "seconds": 10.02,
+          "rows": 16,
+          "out_of_bounds": [
+            0
+          ],
+          "using_sircl": true,
+          "largest_rows": [
+            [
+              "134217728",
+              "67108864",
+              "bfloat16",
+              "none",
+              "0",
+              "5769.11",
+              "23.26",
+              "23.26",
+              "0",
+              "5767.88",
+              "23.27",
+              "23.27",
+              "0"
+            ],
+            [
+              "268435456",
+              "134217728",
+              "bfloat16",
+              "none",
+              "0",
+              "11256.8",
+              "23.85",
+              "23.85",
+              "0",
+              "11243.6",
+              "23.87",
+              "23.87",
+              "0"
+            ]
+          ],
+          "revision": "748142fb36850fb097454e4b4c01cf1b3070461e",
+          "collective": "broadcast",
+          "mode": "graph"
+        }
+      ]
+    }
+  },
+  "host_framework": {
+    "source": "748142fb36850fb097454e4b4c01cf1b3070461e",
+    "framework": "PyTorch 2.11.0+cu130",
+    "nccl": "2.32.3",
+    "exit": 0,
+    "seconds": 65.26,
+    "cases": [
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.47 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.48 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.48 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.48 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          8,
+          null,
+          null,
+          null
+        ],
+        "case": "path4"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.52 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.63 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.63 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.59 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 4,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.55 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 5,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.58 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 6,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.62 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 7,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.62 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          8,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "case": "cycle8"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.29 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.31 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          64,
+          null
+        ],
+        "case": "pair"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.28 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.33 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          64,
+          null
+        ],
+        "case": "pair-stock-tuner"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.39 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.39 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.39 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.39 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          4,
+          null,
+          null,
+          null
+        ],
+        "case": "override4"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.10 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.12 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.12 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.12 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          16,
+          null,
+          null,
+          null
+        ],
+        "case": "override16"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.34 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.24 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.34 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.35 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          64,
+          null,
+          null,
+          null
+        ],
+        "case": "disabled"
+      }
+    ]
+  },
+  "container_framework": {
+    "framework": "PyTorch 2.14.0a0+b2c75dd062.nv26.09",
+    "image": "nvcr.io/nvidia/pytorch:26.09-py3",
+    "image_id": "sha256:a2d1be1817a6ecf66c56d60e4ab76c1ff745b407c31b4a7a76c1021f8a013d53",
+    "runs": [
+      {
+        "case": "channels",
+        "exit": 0,
+        "seconds": 67.83
+      },
+      {
+        "case": "reject-ll128",
+        "exit": 2,
+        "seconds": 0.37
+      }
+    ],
+    "cases": [
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.27 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.31 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.31 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.31 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          8,
+          null,
+          null,
+          null
+        ],
+        "case": "path4"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.60 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.59 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.61 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.61 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 4,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.60 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 5,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.60 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 6,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.54 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 7,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.55 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          8,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "case": "cycle8"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.31 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.31 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          64,
+          null
+        ],
+        "case": "pair"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.26 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.35 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          64,
+          null
+        ],
+        "case": "pair-stock-tuner"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.35 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.35 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.35 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.35 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          4,
+          null,
+          null,
+          null
+        ],
+        "case": "override4"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.17 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.17 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.17 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.17 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          16,
+          null,
+          null,
+          null
+        ],
+        "case": "override16"
+      },
+      {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "protocols": "LL,Simple",
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.39 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.35 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.39 s",
+            "plugin": true,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.34 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ],
+        "max_active_channels": [
+          64,
+          null,
+          null,
+          null
+        ],
+        "case": "disabled"
+      }
+    ]
+  },
+  "raw_ll128_native": [
+    {
+      "net": "sircl",
+      "protocol": "LL128",
+      "exits": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "seconds": 3.45
+    },
+    {
+      "net": "Socket",
+      "protocol": "LL128",
+      "exits": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "seconds": 4.0
+    },
+    {
+      "net": "sircl",
+      "protocol": "Simple",
+      "exits": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "seconds": 3.24
+    }
+  ],
+  "raw_ll128_pytorch": [
+    {
+      "net": "sircl",
+      "extra": {},
+      "exit": 1,
+      "seconds": 7.78,
+      "summary": {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 1,
+            "pass": false,
+            "exact_lines": 4,
+            "teardown": "0.29 s",
+            "plugin": true,
+            "wrong": true
+          },
+          {
+            "rank": 1,
+            "exit": 1,
+            "pass": false,
+            "exact_lines": 5,
+            "teardown": "0.28 s",
+            "plugin": true,
+            "wrong": true
+          },
+          {
+            "rank": 2,
+            "exit": 1,
+            "pass": false,
+            "exact_lines": 5,
+            "teardown": "0.26 s",
+            "plugin": true,
+            "wrong": true
+          },
+          {
+            "rank": 3,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.29 s",
+            "plugin": true,
+            "wrong": false
+          }
+        ]
+      }
+    },
+    {
+      "net": "socket",
+      "extra": {},
+      "exit": 1,
+      "seconds": 8.28,
+      "summary": {
+        "net": "socket",
+        "teardown": "release-graph",
+        "windowed": false,
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 1,
+            "pass": false,
+            "exact_lines": 3,
+            "teardown": "0.30 s",
+            "plugin": false,
+            "wrong": true
+          },
+          {
+            "rank": 1,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.30 s",
+            "plugin": false,
+            "wrong": false
+          },
+          {
+            "rank": 2,
+            "exit": 0,
+            "pass": true,
+            "exact_lines": 7,
+            "teardown": "0.30 s",
+            "plugin": false,
+            "wrong": false
+          },
+          {
+            "rank": 3,
+            "exit": 1,
+            "pass": false,
+            "exact_lines": 5,
+            "teardown": "0.30 s",
+            "plugin": false,
+            "wrong": true
+          }
+        ]
+      }
+    },
+    {
+      "net": "sircl",
+      "extra": {
+        "NCCL_CGA_CLUSTER_SIZE": "1"
+      },
+      "exit": 1,
+      "seconds": 7.86,
+      "summary": {
+        "net": "sircl",
+        "teardown": "release-graph",
+        "windowed": false,
+        "backend": "pytorch",
+        "ranks": [
+          {
+            "rank": 0,
+            "exit": 1,
+            "pass": false,
+            "exact_lines": 4,
+            "teardown": "0.46 s",
+            "plugin": true,
+            "wrong": true
+          },
+          {
+            "rank": 1,
+            "exit": 1,
+            "pass": false,
+            "exact_lines": 5,
+            "teardown": "0.46 s",
+            "plugin": true,
+            "wrong": true
+          },
+          {
+            "rank": 2,
+            "exit": 1,
+            "pass": false,
+            "exact_lines": 5,
+            "teardown": "0.46 s",
+            "plugin": true,
+            "wrong": true
+          },
+          {
+            "rank": 3,
+            "exit": 1,
+            "pass": false,
+            "exact_lines": 5,
+            "teardown": "0.46 s",
+            "plugin": true,
+            "wrong": true
+          }
+        ]
+      }
+    }
+  ],
+  "restoration": {
+    "original_owner_restored": true,
+    "fabric_verified": true,
+    "serving_health_http": 200,
+    "recovery_timer": "active"
+  },
+  "limits": [
+    "LL128 visibility is not implemented by CPU-staged emulation; safe protocol selection is a mitigation",
+    "Reconciliation restores local relay objects after links and independently configured addresses are ready",
+    "Interrupted NCCL communicators and application jobs are not resumed",
+    "One reboot and one state-loss injection on a four-host path; other failure patterns are not qualified"
+  ],
+  "installer_coordination_revision": "5c76ef48878e9cef802b1aae1d5b9abb673ba37d",
+  "systemd_retirement_check": {
+    "passed": true,
+    "wait_seconds": 3.48,
+    "marker_preserved": true,
+    "pending_job_completed_before_input_removal": true
+  }
+}

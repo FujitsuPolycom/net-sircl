@@ -1,7 +1,8 @@
 # DGX Spark transport and fabric validation
 
-Product status: **research-only**. The checks below qualify specific behavior;
-automatic group recovery and arbitrary framework workloads remain unsupported.
+Product status: **research-only**. This record qualifies the specific source
+artifacts identified below. Periodic restoration and safe emulation protocol
+selection have a separate [validation record](recovery-validation.md).
 Measurements were collected on 2026-10-23. The structured
 [measurement artifact](evidence/dgx-spark-transport.json) contains per-sweep
 results, timings, platform versions, GPU checks and negative controls.
@@ -97,7 +98,8 @@ addresses; restoration refuses all changes. Complete facts do not configure
 those addresses. The successful local boot check uses a temporary prerequisite
 service to restore saved addresses before the unmodified fabric unit runs.
 
-Automatic group recovery is **unsupported**. The reboot also resets neighboring
+The boot-only service in the recorded source does not recover the entire group.
+The reboot also resets neighboring
 carriers. Two running neighbors lose six routes and six neighbor entries in
 total; group verification fails although the rebooted host verifies. Explicit
 apply across all four hosts repairs the group; verification and the repeated
@@ -135,6 +137,7 @@ remote mappings, 1,536 simultaneous registrations and 300 completion queues;
 a reduced cache bound forces eviction. All eight aarch64 builds produce the
 same production-library hash.
 
-No vLLM/SGLang server, training job, physical packet-loss recovery, rank-loss
-recovery, exhaustive concurrency envelope or automatic group recovery is
-qualified. Site host names, addresses, keys and raw service logs remain private.
+These measurements do not qualify vLLM/SGLang serving, training jobs, physical
+packet-loss recovery, rank-loss recovery or an exhaustive concurrency envelope.
+Periodic group restoration is scoped separately in the recovery validation.
+Site host names, addresses, keys and raw service logs remain private.
