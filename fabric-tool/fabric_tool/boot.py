@@ -3,7 +3,7 @@
 ``install-boot`` writes the unit ``fabric-table.service``, copies the topology
 file and the facts document to ``/etc/fabric-table/``, enables the unit and
 installs the table now; ``remove-boot`` disables and removes both. The unit
-runs ``apply --boot``, whose restore semantics add every missing object and
+runs ``apply --boot --execute``, whose restore semantics add every missing object and
 remove nothing, so a boot either reinstalls the whole table (``/run`` is
 cleared, interfaces and their routes and filters come up empty, markers are
 gone) or changes nothing while the table stands.
@@ -16,7 +16,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import commands
+from . import commands, model
 
 UNIT_NAME = "fabric-table.service"
 INPUT_DIR = "/etc/fabric-table"
@@ -33,7 +33,7 @@ class RestoreInvocation:
 
     tool: str = DEFAULT_TOOL
     marker: str = commands.DEFAULT_MARKER
-    max_relays: int = 3
+    max_relays: int = model.DEFAULT_MAX_RELAYS
     host: str | None = None
     skip_hostname_check: bool = False
 

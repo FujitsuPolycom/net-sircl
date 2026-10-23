@@ -422,7 +422,6 @@ class HostState:
     name: str
     ssh: str
     reachable: bool
-    bindings: model.FabricBindings = model.DEFAULT_BINDINGS
     error: str = ""
     hostname: str = ""
     versions: str = ""
@@ -442,6 +441,7 @@ class HostState:
     sparkring_record: dict | None = None
     raw: dict[str, str] = dataclasses.field(default_factory=dict)
     parse_problems: list[str] = dataclasses.field(default_factory=list)
+    bindings: model.FabricBindings = model.DEFAULT_BINDINGS
 
     # -- facts --
 

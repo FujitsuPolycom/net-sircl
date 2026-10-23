@@ -110,14 +110,15 @@ class _Script:
     qdisc_del: list[str] = dataclasses.field(default_factory=list)
     record: list[str] = dataclasses.field(default_factory=list)
 
-    def lines(self, hostname: str) -> list[str]:
+    def lines(self, hostname: str, *, check_hostname: bool = True) -> list[str]:
         body = (self.qdisc_add + self.filter_del + self.filter_add + self.neigh_set + self.route_set
                 + self.marker_stop + self.marker_start + self.route_del + self.neigh_del + self.qdisc_del
                 + self.record)
         if not body:
             return []
         settle = [commands.SETTLE] if self.marker_start else []
-        return [commands.HEADER, commands.guard(hostname), *body, *settle]
+        guard = [commands.guard(hostname)] if check_hostname else []
+        return [commands.HEADER, *guard, *body, *settle]
 
 
 def _route_equal(entry: RouteEntry, destination: str, netdev: str, source: str) -> bool:
@@ -245,23 +246,25 @@ class ReconcilePolicy:
     mode: str
     remove_stale: bool
     require_adoption: bool
+    persist_record: bool = True
 
 
 APPLY = ReconcilePolicy("up", True, True)
 RESTORE = ReconcilePolicy("boot", False, False)
+REMOVE = ReconcilePolicy("down", True, True, False)
 
 
 def compare_up(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name: str,
                marker: commands.MarkerConfig, adopt: bool, check_hostname: bool = True) -> HostDiff:
     """Reconcile desired resources and remove stale owned resources."""
     return _reconcile(state, host, plan, layout_name=layout_name, marker=marker,
-                      adopt=adopt, check_hostname=check_hostname, policy=APPLY)
+                      adopt=adopt, check_hostname=check_hostname, policy=APPLY, group=plan.group.label)
 
 
-def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name: str,
-               marker: commands.MarkerConfig, adopt: bool, check_hostname: bool, policy: ReconcilePolicy) -> HostDiff:
+def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan | None, *, layout_name: str,
+               marker: commands.MarkerConfig, adopt: bool, check_hostname: bool, policy: ReconcilePolicy, group: str) -> HostDiff:
     """What ``apply`` changes on one host to install its group's plan."""
-    diff = HostDiff(host.position, host.name, plan.group.label, policy.mode)
+    diff = HostDiff(host.position, host.name, group, policy.mode)
     if _common_blockers(diff, state, check_hostname=check_hostname):
         return diff
     script = _Script()
@@ -293,7 +296,7 @@ def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name
             before = "; ".join(entry.text() for entry in entries)
             diff.changes.append(Change("filter", "replace" if entries else "add", f"{netdev} pref {pref}",
                                        f"{before} -> {wanted}" if entries else wanted))
-        for pref, entries in sorted(present.items()) if policy.remove_stale else (): 
+        for pref, entries in sorted(present.items()) if policy.remove_stale else ():
             script.filter_del.extend(_filter_removal(entries, state.bindings))
             removed_filters[netdev] += len(entries)
             diff.changes.append(Change("filter", "remove", f"{netdev} pref {pref}",
@@ -361,7 +364,7 @@ def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name
     _marker_changes(diff, script, state, host, marker)
 
     # Qdiscs the record lists as added by the tool and that no filter needs any more.
-    record = state.record if state.record and state.record.get("group") == plan.group.label else None
+    record = state.record if state.record and state.record.get("group") == group else None
     recorded = set(record.get("qdiscs", [])) if record else set()
     kept = set(added_qdiscs) | recorded
     for netdev in sorted(recorded) if policy.remove_stale else ():
@@ -370,64 +373,38 @@ def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name
             script.qdisc_del.append(commands.qdisc_del(netdev, bindings=state.bindings))
             kept.discard(netdev)
             diff.changes.append(Change("qdisc", "remove", netdev, "ingress qdisc added by the tool"))
-    wanted_record = _record(host, plan, layout_name, marker, sorted(kept))
+    wanted_record = None
+    if policy.persist_record:
+        assert plan is not None
+        wanted_record = _record(host, plan, layout_name, marker, sorted(kept))
     if state.record != wanted_record:
-        script.record.extend(commands.record_write(wanted_record))
-        before = (f"group {state.record.get('group')}, plan {state.record.get('plan')}" if state.record
-                  else "none")
-        diff.changes.append(Change("record", "write", commands.RECORD_PATH,
-                                   f"{before} -> group {plan.group.label}, layout {layout_name}, plan {plan.digest}"))
+        if wanted_record is None:
+            script.record.append(commands.record_remove())
+            diff.changes.append(Change("record", "remove", commands.RECORD_PATH, f"group {group}"))
+        else:
+            script.record.extend(commands.record_write(wanted_record))
+            before = f"group {state.record.get('group')}" if state.record else "none"
+            diff.changes.append(Change("record", "write", commands.RECORD_PATH,
+                                       f"{before} -> group {group}, layout {layout_name}, plan {plan.digest}"))
     for entry in state.foreign_tag_filters():
         diff.notes.append(f"a filter outside the reserved preferences matches relay tag 0x{entry.protocol:04x}: "
                           f"{entry.text()}")
     if policy.require_adoption:
         _adopt_blocker(diff, adopt)
-    diff.commands = script.lines(host.name) if diff.pending else []
+    diff.commands = script.lines(host.name, check_hostname=check_hostname) if diff.pending else []
     return diff
 
 
 def compare_down(state: HostState, *, group: str, marker: commands.MarkerConfig, adopt: bool,
                  check_hostname: bool = True) -> HostDiff:
     """What ``remove`` deletes from one host: every object the tool owns there."""
-    diff = HostDiff(state.position, state.name, group, "down")
-    if _common_blockers(diff, state, check_hostname=check_hostname):
-        return diff
-    script = _Script()
-    removed_filters = {netdev: 0 for netdev in state.bindings.netdevs}
-    for netdev in state.bindings.netdevs:
-        present: dict[int, list[FilterEntry]] = {}
-        for entry in state.reserved_filters(netdev):
-            present.setdefault(entry.pref, []).append(entry)
-        for pref, entries in sorted(present.items()):
-            script.filter_del.extend(_filter_removal(entries, state.bindings))
-            removed_filters[netdev] += len(entries)
-            diff.changes.append(Change("filter", "remove", f"{netdev} pref {pref}",
-                                       "; ".join(entry.text() for entry in entries)))
-    for entry in state.relay_routes():
-        script.route_del.append(_route_removal(entry, state.bindings))
-        diff.changes.append(Change("route", "remove", f"{entry.destination}/32", entry.text(), not entry.owned))
-    for entry in state.relay_neighbours():
-        script.neigh_del.append(commands.neigh_del(entry.destination, entry.dev, bindings=state.bindings))
-        diff.changes.append(Change("neighbour", "remove", f"{entry.destination} dev {entry.dev}", entry.text(),
-                                   not entry.owned))
-    _marker_changes(diff, script, state, None, marker)
-    recorded = set(state.record.get("qdiscs", [])) if state.record else set()
-    for netdev in sorted(recorded):
-        remaining = len(state.filters.get(netdev, [])) - removed_filters.get(netdev, 0)
-        if remaining <= 0 and state.ingress_qdisc.get(netdev) == "ingress":
-            script.qdisc_del.append(commands.qdisc_del(netdev, bindings=state.bindings))
-            diff.changes.append(Change("qdisc", "remove", netdev, "ingress qdisc added by the tool"))
-    if state.record is not None:
-        script.record.append(commands.record_remove())
-        diff.changes.append(Change("record", "remove", commands.RECORD_PATH,
-                                   f"group {state.record.get('group')}, plan {state.record.get('plan')}"))
-    _adopt_blocker(diff, adopt)
-    diff.commands = script.lines(state.name) if diff.pending else []
-    return diff
+    desired = HostPlan(state.position, state.name, group, (), (), state.bindings)
+    return _reconcile(state, desired, None, layout_name="", marker=marker, adopt=adopt,
+                      check_hostname=check_hostname, policy=REMOVE, group=group)
 
 
 def compare_boot(state: HostState, host: HostPlan, plan: GroupPlan, *, layout_name: str,
                  marker: commands.MarkerConfig, adopt: bool, check_hostname: bool = True) -> HostDiff:
     """Restore desired objects while retaining stale and foreign resources."""
     return _reconcile(state, host, plan, layout_name=layout_name, marker=marker,
-                      adopt=adopt, check_hostname=check_hostname, policy=RESTORE)
+                      adopt=adopt, check_hostname=check_hostname, policy=RESTORE, group=plan.group.label)

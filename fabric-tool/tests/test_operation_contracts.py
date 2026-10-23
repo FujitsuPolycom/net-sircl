@@ -7,6 +7,7 @@ import pytest
 
 from fabric_tool import boot, cli, commands, diff, facts, model, ops, plan, state, topology
 from test_facts import _document, RING4
+from test_marker_security import environment
 
 
 def custom_document():
@@ -85,3 +86,67 @@ def test_systemd_argument_escaping():
     assert boot.systemd_arg('a%$"\\b') == '"a%%$$\\"\\\\b"'
     with pytest.raises(ValueError, match='control characters'):
         boot.systemd_arg('line\nbreak')
+
+
+def test_restore_honors_explicit_hostname_policy():
+    topo = topology.parse(RING4)
+    built = plan.build_plan(topo.group, facts.bind(_document(), topo))
+    host = built.hosts[0]
+    observed = state.HostState(host.position, host.name, '', True, hostname='different-host')
+    arguments = dict(layout_name=topo.group.name, marker=commands.MarkerConfig(), adopt=False)
+    guarded = diff.compare_boot(observed, host, built, **arguments)
+    assert any('different-host' in blocker for blocker in guarded.blockers)
+    permitted = diff.compare_boot(observed, host, built, check_hostname=False, **arguments)
+    assert not any('different-host' in blocker for blocker in permitted.blockers)
+    assert '$(hostname)' not in (permitted.script or '')
+
+
+@pytest.mark.parametrize('mode,removes_stale', [('up', True), ('boot', False), ('down', True)])
+def test_resource_policy_preserves_restoration_and_removal_contracts(mode, removes_stale):
+    topo = topology.parse(RING4)
+    built = plan.build_plan(topo.group, facts.bind(_document(), topo))
+    host = built.hosts[0]
+    observed = state.HostState(host.position, host.name, '', True, hostname=host.name)
+    observed.routes.append(state.RouteEntry('198.51.100.19', 32, host.bindings.netdevs[0],
+                                            '192.0.2.1', 'link', 82, '82', 0, None, 'unicast'))
+    marker = commands.MarkerConfig()
+    if mode == 'down':
+        result = diff.compare_down(observed, group=topo.group.label, marker=marker, adopt=False)
+    else:
+        compare = diff.compare_up if mode == 'up' else diff.compare_boot
+        result = compare(observed, host, built, layout_name=topo.group.name, marker=marker, adopt=False)
+    removed = any(change.kind == 'route' and change.action == 'remove' and
+                  change.key == '198.51.100.19/32' for change in result.changes)
+    assert removed == removes_stale
+
+
+def test_remove_preserves_owned_qdisc_with_unrelated_filters():
+    marker = commands.MarkerConfig()
+    observed = state.HostState(0, 'node-0', '', True, hostname='node-0')
+    device = observed.bindings.netdevs[0]
+    observed.record = {'group': 'path:0-1', 'qdiscs': [device]}
+    observed.ingress_qdisc[device] = 'ingress'
+    observed.filters[device] = [state.FilterEntry(device, 99, 0, 'flower', 0x0800, 1,
+                                                 True, True, None, None, None, None)]
+    result = diff.compare_down(observed, group='path:0-1', marker=marker, adopt=False)
+    assert not any(change.kind == 'qdisc' and change.action == 'remove' for change in result.changes)
+
+
+def test_service_invocation_dispatches_restoration(environment, tmp_path, monkeypatch):
+    _, _, _, arguments = environment
+    topology_path = arguments[arguments.index('--topology') + 1]
+    facts_path = tmp_path / 'boot-facts.json'
+    facts_path.write_text(json.dumps(_document()))
+    monkeypatch.setattr(boot, 'TOPOLOGY_INPUT', topology_path)
+    monkeypatch.setattr(boot, 'FACTS_INPUT', str(facts_path))
+    monkeypatch.setattr(cli, '_route_check', lambda *args, **kwargs: 0)
+    service = boot.unit_text(invocation=boot.RestoreInvocation(host='node-0'))
+    argv = shlex.split(next(line[len('ExecStart='):] for line in service.splitlines()
+                            if line.startswith('ExecStart=')))
+    class RestorationDispatched(Exception):
+        pass
+    def executor(target, script, timeout):
+        assert 'sudo -n tc filter add' in script
+        raise RestorationDispatched()
+    with pytest.raises(RestorationDispatched):
+        cli.main(argv[1:], executor=executor)
