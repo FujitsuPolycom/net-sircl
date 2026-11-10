@@ -2,7 +2,7 @@
 
 Derived from the SparkRing relay installer; see NOTICE. Every
 host is reached through an *executor*: a function that runs one ``bash -s``
-script and returns its exit code and output â€” over SSH
+script and returns its exit code and output — over SSH
 (:func:`ssh_executor`, batch mode) or on this machine (:func:`local_executor`,
 the per-host run). The hosts of an operation are contacted in parallel.
 
@@ -58,7 +58,8 @@ Executor = Callable[[str, str, float], Result]
 
 def ssh_executor(target: str, script: str, timeout: float) -> Result:
     """Run ``script`` with ``bash -s`` on ``target`` (batch-mode SSH, deadline ``timeout``)."""
-    argv = ["ssh", *SSH_OPTIONS, target, "bash -s"]
+    # ``--`` ends ssh's options: a target that starts with ``-`` is a host name, never an option.
+    argv = ["ssh", *SSH_OPTIONS, "--", target, "bash -s"]
     try:
         process = subprocess.run(argv, input=script.encode(), capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -140,6 +141,23 @@ def cable_problems(group: GroupSpec, facts: Facts) -> list[str]:
     return problems
 
 
+def unchecked_cables(group: GroupSpec, facts: Facts) -> list[str]:
+    """Links :func:`cable_problems` could not check: an end's facts give its address without a prefix
+    length, so its subnet is unknown. Reported, so a skipped cabling check is never a silent pass."""
+    skipped = []
+    for cable in group.layout.fabric.cables:
+        for secondary in (False, True):
+            here = facts.port(cable.a, facts.bindings.role_at(cable.a_port, secondary).netdev)
+            there = facts.port(cable.b, facts.bindings.role_at(cable.b_port, secondary).netdev)
+            if here.network() is None or there.network() is None:
+                skipped.append(f"{cable.text} ({model.class_name(secondary)})")
+    if not skipped:
+        return []
+    return [f"the cabling check was skipped for {len(skipped)} link(s) ({', '.join(skipped)}): the facts give "
+            "their addresses without prefix lengths, so the topology's host order was not compared with the "
+            "cabling (`facts` writes addresses with prefix lengths)"]
+
+
 @dataclasses.dataclass
 class Outcome:
     """A comparison of the topology's hosts with the plan (``up``/``boot``) or their removal (``down``)."""
@@ -151,6 +169,7 @@ class Outcome:
     diffs: list[diff_mod.HostDiff] = dataclasses.field(default_factory=list)
     problems: list[str] = dataclasses.field(default_factory=list)
     facts: Facts | None = None
+    notes: list[str] = dataclasses.field(default_factory=list)
 
     @property
     def blocked(self) -> bool:
@@ -206,6 +225,7 @@ def evaluate(topology: Topology, states: dict[int, HostState], file_facts: Facts
     if not problems:
         try:
             problems += cable_problems(group, facts)
+            outcome.notes.extend(unchecked_cables(group, facts))
             if not problems:
                 plan = build_plan(group, facts, max_relays=max_relays)
         except FabricError as error:

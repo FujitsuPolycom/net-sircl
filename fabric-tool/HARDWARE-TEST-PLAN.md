@@ -8,7 +8,7 @@ CPU tests establish software contracts, not real forwarding or boot restoration.
 
 Use placeholders `node-0` through `node-3` for one ring and `node-4` through
 `node-7` for the other. Substitute actual host names and SSH targets privately.
-Each ring cables position i's port 0 to position i+1's port 1, closing at 3â†’0.
+Each ring cables position i's port 0 to position i+1's port 1, closing at 3→0.
 For its path test, describe the same ordered hosts with `cabling path`.
 
 ## Prepare and record (about 15 minutes)
@@ -65,7 +65,7 @@ Use unpatched NCCL 2.32.3, nccl-tests v2.21.1 and one GPU/rank per host.
 Select `NCCL_NET=sircl`, the stamped plugin and `NCCL_ALGO=Ring`. Record actual
 library selection and version/core identity from INIT logs. Run a stock pair
 control, then all-reduce, all-gather and broadcast on the path of four at
-8â€“256 MiB, bfloat16, eager and 20 graph replays. Run the repository's PyTorch
+8–256 MiB, bfloat16, eager and 20 graph replays. Run the repository's PyTorch
 example; release captured graphs before process-group teardown.
 
 Require exit zero on every rank, exact results, no out-of-bounds errors and

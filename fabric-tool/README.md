@@ -45,12 +45,12 @@ The installed copy of that guide is under `share/doc/net-sircl/`.
 |---|---|
 | `plan` (default) | Offline relay plan; `--commands` needs complete `--facts`; `--json` emits machine-readable output |
 | `facts` | Read local host, or every topology host with repeated `--ssh NAME=TARGET`; `--output FILE` saves facts |
-| `apply` | Preview reconciliation; `--execute` applies; `--boot` restores without removing objects |
+| `apply` | Preview reconciliation; `--execute` applies; `--boot` restores: adds missing objects, replaces planned objects that differ, removes nothing the plan does not name |
 | `verify` | Read and compare objects and resolve lane destinations with `ip route get`; zero means success |
 | `status` | Show owned and unowned objects |
 | `install-marker` | Preview/build `mesh_marker.c` on hosts, install root-owned at `/usr/local/libexec/fabric-tool/fabric-tool-marker` and record its SHA-256 |
 | `remove` | Preview/remove owned relay objects |
-| `install-boot` | Install the retained fabric service, periodic reconciliation service/timer, tool and inputs; apply now and start checks |
+| `install-boot` | Install the retained fabric service, periodic reconciliation service/timer, tool and inputs; apply now and start checks (the timer starts even when that apply fails, so it is retried) |
 | `remove-boot` | Stop reconciliation and remove units/inputs; leave live table, markers and tool copy |
 
 `apply`, `verify`, `remove`, `status` and `install-marker` act locally by default.
@@ -64,7 +64,36 @@ Exit codes: 0 success; 1 failed reads or remaining changes; 2 invalid input;
 mismatch and non-relay routes to planned destinations. A failure during execution
 may leave partial state; inspect and reconcile before using the table.
 
+A read that could not be made is a blocker, not an empty host: the read script
+reports a tool missing from the read account's `PATH` (`ip`, `tc`, `pgrep`,
+`sha256sum`, `stat`, `head`), a failed read of addresses, routes or permanent
+neighbours, a `tc` that could not be executed and a failed `pgrep`. `apply` and
+`remove` refuse such a host and `verify` fails. Facts whose addresses lack
+prefix lengths cannot be checked against the cabling; the comparison says so
+in a `NOTE` line instead of passing silently.
+
+Restore (`apply --boot`, the boot unit's mode) keeps what the plan does not
+name: stale routes, neighbours, filters and qdiscs, marker processes of a
+device without planned rules and marker-named processes without a device. It
+still replaces a planned filter, route, neighbour or marker that differs.
+
+The ownership record names the layout by a digest of the topology's hosts,
+cables and functions, so copies of one topology under different file names
+(for example the boot unit's `/etc/fabric-table/topology`) agree. A host with
+a record written by an earlier version shows one pending record write, which
+one apply converges. A script that adds ingress qdiscs writes the record
+first, so a run that fails later keeps their ownership and `remove` deletes
+them. `remove` must be given the `--marker` the table was applied with: it
+refuses a host whose record names a marker with another process name.
+`verify` does not take `--adopt`; it reports unowned objects as blockers.
+
 ## Marker security
+
+Only processes whose real and effective user are root count as running
+markers (`pgrep -U 0 -u 0`); a process of another user that carries the
+marker's name and arguments is not read, so it can neither stand in for a
+marker nor cause one to be restarted. A read whose output repeats a section
+header is refused.
 
 The marker runs as root. Before every start, the tool requires its executable,
 its adjacent `.sha256` file and every parent directory through `/` to be owned

@@ -70,17 +70,24 @@ def main():
         site = [line.split("#", 1)[0].strip() for line in args.site_values.read_text().splitlines()]
         site = [value for value in site if value]
     try:
-        count = 0
+        count = scanned = 0
         for name in source_paths(args.root, args.tree):
             if name == "scripts/check_release_safety.py":
                 continue
             data = (args.root / name).read_bytes()
-            if b"\0" in data:
-                continue
-            for line, rule in findings(data.decode("utf-8"), site):
+            scanned += 1
+            # A NUL byte must not hide the rest of a file: scan binary content too, split at the NULs.
+            text = (data.replace(b"\0", b"\n").decode("utf-8", errors="replace") if b"\0" in data
+                    else data.decode("utf-8"))
+            for line, rule in findings(text, site):
                 print(json.dumps({"path": name, "line": line, "rule": rule}))
                 count += 1
-        print(f"Release-safety findings: {count}; matched content withheld; site values: {len(site)}")
+        if not scanned:
+            # A missing or empty tree is not a clean one.
+            print("Release-safety scan found no source files to inspect")
+            return 2
+        print(f"Release-safety findings: {count}; matched content withheld; site values: {len(site)}; "
+              f"files scanned: {scanned}")
         return int(count > 0)
     except (OSError, ValueError, subprocess.SubprocessError):
         print("Release-safety scan could not inspect all source files")

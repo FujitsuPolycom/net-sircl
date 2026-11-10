@@ -16,9 +16,11 @@ test plugin. `make check` runs:
 
 - transport-core: three C test executables for concurrent window arithmetic, abort/progress
   callbacks, emulated verbs and barrier-controlled executor/mapping lifetimes,
-  plus five Python discovery/topology tests.
+  plus seven Python discovery/topology tests, including what the topology parser
+  refuses and accepts.
 - net-sircl: Python tests, including multiprocess transfer, window, lane,
-  teardown, peer-loss and deadline tests, fixed topology expectations and
+  teardown, peer-loss, deadline, stray-connection and deep-window tests, peers that
+  are late rather than lost, strict settings, fixed topology expectations and
   the real-NIC library's v7–v12 export check, ABI layout calls, route/ACK
   capacity oracle, oldest-first credit, partial completions and profiling checks. That export check needs rdma-core
   headers and `nm`; CI installs both.
@@ -28,6 +30,9 @@ test plugin. `make check` runs:
   and local Bash checks without privileged host changes. No external
   checkout or full-network simulator is used. These do not exercise real
   apply/verify/remove across hosts or restoration after an actual reboot.
+- Topology conformance: the plugin's C parser and fabric-tool's Python parser
+  read one corpus of topology files and must agree on which are valid, on the
+  cables and on every lane.
 - Release contracts: shipped C/C++/header hashes, example routes, embedded core
   identity, and archive reproducibility/completeness, extracted-source privacy scanning and
   complete distributed C/C++/header inventory. The archive test creates
@@ -120,7 +125,9 @@ credential-like strings. It reports locations and rule names without matched
 values. `--site-values FILE` adds literal host names or addresses, one per line;
 keep the file untracked (`scripts/config/site-values.txt` is ignored and
 excluded). The scanner checks Git-tracked text by default. `--tree` enumerates confined
-regular files without Git metadata and refuses symbolic links. CI scans the
+regular files without Git metadata and refuses symbolic links. A tree with no
+files to inspect is an error, not a clean result, and a file containing NUL
+bytes is scanned like any other. CI scans the
 extracted archive before building it, using the same rules.
 
 ## Source identity
@@ -143,8 +150,9 @@ limits, the direct-pair stock-tuner control, overrides and tuner disablement.
 Use the site's GPU reservation for these commands.
 
 [Compatibility](compatibility.md) documents the native runtime matrix and its
-reproducer. CPU fault injection covers silent peers, lost completion delivery,
-sticky errors and bounded close. Fabric tests cover missing forwarding rules,
+reproducer. CPU fault injection covers silent peers (waited for by default,
+failed at the optional peer-wait bound), lost completion delivery, sticky errors
+that hang the connection up, and bounded close. Fabric tests cover missing forwarding rules,
 lost `in_hw`, unreachable relays and verify blockers without contacting a host.
 
 The distributed source inventory is regenerated with

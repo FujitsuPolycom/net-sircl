@@ -205,7 +205,7 @@ def port_from_text(netdev: str, mac: str, address: str, *, owner: str) -> Port:
     """A validated :class:`Port` from a MAC and ``a.b.c.d`` or ``a.b.c.d/len``."""
     model.device_name(netdev)
     mac = mac.strip().lower()
-    if not _MAC.match(mac):
+    if not _MAC.fullmatch(mac):
         raise FabricError(f"{owner} {netdev}: {mac!r} is not a MAC address")
     try:
         if "/" in address:
@@ -499,7 +499,8 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
     by_position = {host.position: host for host in hosts}
     for host in hosts:
         for route in host.routes:
-            result = trace(by_position, facts, group.ring_size, host.position, route.destination)
+            result = trace(by_position, facts, group.ring_size, host.position, route.destination,
+                           fabric=layout.fabric)
             if result.outcome != "delivered" or result.hops[-1] != (route.peer, route.peer_netdev):
                 raise FabricError(f"group {group.label}: the route from {host.name} to {route.destination} does "
                                   f"not deliver through the plan's relays ({result.outcome}: {result.detail})")
@@ -544,12 +545,16 @@ class Trace:
 
 
 def trace(hosts: Mapping[int, HostPlan], facts: Facts, ring_size: int, origin: int, destination: str,
-          *, limit: int = 2 * MAX_TAG) -> Trace:
+          *, limit: int = 2 * MAX_TAG, fabric: model.Fabric | None = None) -> Trace:
     """Follow a frame from ``origin`` to ``destination`` through the plan's objects on the cabling.
 
-    Port 0 of position ``i`` is cabled to port 1 of position ``i + 1``. A frame
-    is received by the function whose MAC it carries on the far end of the
-    cable; a tagged frame continues only through a relay filter for its tag.
+    With ``fabric`` the frame crosses that fabric's cables, whatever ports
+    they join (the cables of the topology, including ``cabling explicit``);
+    a frame that leaves through a port without a cable is dropped. Without it
+    the cabling is a ring of ``ring_size``: port 0 of position ``i`` is cabled
+    to port 1 of position ``i + 1``. A frame is received by the function whose
+    MAC it carries on the far end of the cable; a tagged frame continues only
+    through a relay filter for its tag.
     """
     host = hosts.get(origin)
     route = host.route_to(destination) if host is not None else None
@@ -559,11 +564,18 @@ def trace(hosts: Mapping[int, HostPlan], facts: Facts, ring_size: int, origin: i
     hops: list[tuple[int, str]] = []
     for _ in range(limit):
         port = facts.bindings.role_of_netdev(out_netdev).port
-        there = (here + 1) % ring_size if port == 0 else (here - 1) % ring_size
+        if fabric is None:
+            there, far_port = ((here + 1) % ring_size if port == 0 else (here - 1) % ring_size), 1 - port
+        else:
+            step = fabric.cross(here, port)
+            if step is None:
+                return Trace("dropped", tuple(hops), f"a frame for {mac} leaves position {here} port {port}, "
+                             "which has no cable")
+            there, far_port = step.dst, step.dst_port
         receiver = facts.find_mac(mac)
-        if receiver is None or receiver[0] != there or facts.bindings.role_of_netdev(receiver[1]).port != 1 - port:
+        if receiver is None or receiver[0] != there or facts.bindings.role_of_netdev(receiver[1]).port != far_port:
             return Trace("misdelivered", tuple(hops), f"a frame for {mac} leaves position {here} port {port}; "
-                         f"the cable ends at position {there} port {1 - port}")
+                         f"the cable ends at position {there} port {far_port}")
         hops.append(receiver)
         netdev = receiver[1]
         k = relays_left(ethertype)

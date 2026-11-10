@@ -6,8 +6,13 @@ reads host state and computes the changes needed to match the plan.
 ## Inputs and planning
 
 `fabric_tool/topology.py` reads hosts, cables and function names using the
-same conventions as `transport-core/src/topology.c`. `model.py` derives
-shortest paths and lanes. A layout means ordered hosts and cables; a group is
+same conventions as `transport-core/src/topology.c`: at most 64 hosts, names
+of 1 to 63 bytes, a decimal `relay_budget`, and one cable for two hosts under
+`cabling ring` as under `cabling path` (a pair joined by two cables is written
+with `cabling explicit`). `model.py` derives
+shortest paths and lanes. Routes, filters and the delivery trace follow the
+topology's cables, so `cabling explicit` may join the hosts in any order and
+through either port as long as the cables form one path or one cycle. A layout means ordered hosts and cables; a group is
 the hosts managed by one topology file.
 
 `plan.py` carries every shortest path on both function classes. It derives
@@ -22,17 +27,29 @@ subnet prefixes. Contradictions and incomplete host coverage block apply.
 `diff.py` compares them with the plan; `ops.py` runs the selected operations;
 `report.py` formats the result.
 
+The read script never lets a failed read pass for an empty host. It names the
+tools missing from the read account's `PATH` and records the exit status of
+the address, route, neighbour, qdisc, filter and marker-process reads;
+`state.py` turns a missing tool, a failed `ip` read, a `tc` that could not be
+executed (exit 126 or 127; other `tc` failures are not judged) and a failed
+`pgrep` (exit 1 means no match) into parse problems, which block apply and
+remove and fail verify. Only the first block of a section name is used, and a
+repeated header is a parse problem. Marker processes are read with
+`pgrep -U 0 -u 0`: only root's count.
+
 ## Execution and ownership
 
 OFFLINE commands compute from files without host reads. READ-ONLY REMOTE
 commands inspect hosts through SSH. MUTATES HOST commands preview changes
 unless `--execute` is supplied. No command assigns interface addresses.
 
-Ownership marks are routing protocol 82, ingress preferences 11â€“17, marker
+Ownership marks are routing protocol 82, ingress preferences 11–17, marker
 process identities and `/run/fabric-table/relay-state.json`. The tool refuses
 a foreign ownership record and unrelated routes to planned destinations.
 Apply can leave partial state on a command failure; inspect and reconcile it.
-Boot apply restores missing objects without removing any. The systemd unit
+Boot apply restores missing objects and replaces a planned object that
+differs; it removes nothing the plan does not name, including marker
+processes of a device without planned rules. The systemd unit
 is a oneshot operation rather than marker supervision.
 
 See the installed guide `share/doc/net-sircl/docs/fabric.md` for the relay
@@ -84,6 +101,11 @@ stale-object removal and adoption requirements. Restoration retains stale
 objects; apply reconciles them. Qdisc ownership records contain only interfaces
 where the tool added a qdisc, plus previously recorded ownership. Removal leaves
 a pre-existing unowned qdisc intact and preserves qdiscs with unrelated filters.
+A script that adds qdiscs writes the record before it adds them, so a run that
+fails afterwards still owns them. The record's layout name is a digest of the
+topology's hosts, cables and functions, never the file's path: the workstation
+and the boot unit, which read different copies, agree on it. Objects that carry
+the ownership mark on a device outside the fabric's four are noted and left.
 
 `RestoreInvocation` retains execution intent, facts, topology, marker location,
 relay limit and optional host selection. The systemd unit serializes its argument

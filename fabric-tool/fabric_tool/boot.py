@@ -5,8 +5,11 @@ file and the facts document to ``/etc/fabric-table/``, enables the unit and
 installs the table now; ``remove-boot`` disables and removes both. The unit
 runs ``apply --boot --execute`` at startup and reload. A timer requests reload
 every 15 seconds after the preceding check finishes. Restore semantics add
-missing objects and remove nothing. Reload retains the service's marker
+missing objects, replace a planned object that differs and remove nothing the
+plan does not name. Reload retains the service's marker
 processes; restarting the service on each check would kill healthy markers.
+``install-boot`` starts the timer whenever it installed the units, also when
+its own immediate apply failed, so that failure is retried.
 """
 
 from __future__ import annotations
@@ -175,9 +178,10 @@ def remove(*, root: str = "/", execute: bool) -> list[str]:
     removed = []
     if root == "/" and execute:
         stop_reconciliation()
-        if Path(f"/etc/systemd/system/{RECOVERY_TIMER}").exists():
-            subprocess.run(["systemctl", "disable", RECOVERY_TIMER], check=True)
-        subprocess.run(["systemctl", "disable", UNIT_NAME], check=True)
+        # `systemctl disable` fails for a unit file that does not exist; a second removal must not.
+        for unit in (RECOVERY_TIMER, UNIT_NAME):
+            if Path(f"/etc/systemd/system/{unit}").exists():
+                subprocess.run(["systemctl", "disable", unit], check=True)
     for destination in (f"/etc/systemd/system/{UNIT_NAME}", f"/etc/systemd/system/{RECOVERY_SERVICE}",
                         f"/etc/systemd/system/{RECOVERY_TIMER}", TOPOLOGY_INPUT, FACTS_INPUT):
         path = Path(root) / destination.lstrip("/")

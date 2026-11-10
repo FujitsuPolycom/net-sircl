@@ -15,7 +15,9 @@ PYTHON ?= python3
 PREFIX ?= /usr/local
 CFLAGS ?= -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread
 STANDIN := tests/standin
-CORE ?= $(firstword $(wildcard ../../transport-core ../transport-core))
+# The bundled core beside this directory comes first: a directory that merely happens to be called
+# transport-core next to the checkout must not be compiled in instead. CORE=<path> selects another.
+CORE ?= $(firstword $(wildcard ../transport-core ../../transport-core))
 CORE_SOURCES := $(CORE)/src/core.c $(CORE)/src/topology.c $(CORE)/src/sysfs.c net_sircl_plan.c
 CORE_HEADERS := $(wildcard $(CORE)/include/sircl_core/*.h)
 CPPFLAGS += -I$(CORE)/include -include .core-build/core_identity.h

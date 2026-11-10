@@ -43,7 +43,53 @@ def test_defaults_and_overrides():
 def test_plugin_key_and_comments():
     text = "net-sircl-topology\n# a comment\nhosts a b\ncabling ring  # trailing\n"
     ring = topology.parse(text)
-    assert ring.hosts == ("a", "b") and ring.group.label == "cycle:0-1"
+    assert ring.hosts == ("a", "b") and ring.group.label == "pair:0-1"
+
+
+def test_two_host_ring_is_one_cable_like_the_plugin_reads_it():
+    """`transport-core/src/topology.c` gives a pair one cable under `ring`; two cables are `explicit`."""
+    ring = topology.parse("hosts a b\ncabling ring\n")
+    path = topology.parse("hosts a b\ncabling path\n")
+    assert ring.group.cables == path.group.cables == ("0.port0-1.port1",)
+    assert ring.group.label == "pair:0-1" and ring.group.relay_egress == "sibling"
+    assert ring.layout_name == path.layout_name
+    # Both lanes of a pair use the one cable's port, as the plugin derives them.
+    routes = model.derive_routes(ring.group.layout, 2)
+    assert routes.route_text(0) == "1=rocep1s0f0/roceP2p1s0f0"
+    assert routes.route_text(1) == "0=rocep1s0f1/roceP2p1s0f1"
+    double = topology.parse("hosts a b\ncabling explicit\ncable 0.port0 1.port1\ncable 1.port0 0.port1\n")
+    assert double.group.label == "cycle:0-1" and len(double.group.cables) == 2
+    assert topology.parse("hosts a b c\ncabling ring\n").group.label == "cycle:0-1-2"
+
+
+def test_host_count_name_length_and_budget_limits_match_the_plugin():
+    names = [f"h{i}" for i in range(65)]
+    assert topology.parse("hosts " + " ".join(names[:64]) + "\ncabling path\n").size == 64
+    with pytest.raises(FabricError, match="at most 64"):
+        topology.parse("hosts " + " ".join(names) + "\ncabling path\n")
+    assert topology.parse(f"hosts {'a' * 63} b\ncabling path\n").hosts[0] == "a" * 63
+    with pytest.raises(FabricError, match="longer than 63 bytes"):
+        topology.parse(f"hosts {'a' * 64} b\ncabling path\n")
+    with pytest.raises(FabricError, match="longer than 63 bytes"):
+        topology.parse(f"hosts {'é' * 32} b\ncabling path\n")          # 32 characters, 64 bytes
+    assert topology.parse("hosts a b\ncabling path\nrelay_budget 0123\n").budget == 123
+    for budget in ("١٢٣", "²", "+5", "1_0", "0x10"):                      # digits to Python, not to the plugin
+        with pytest.raises(FabricError, match="positive byte count"):
+            topology.parse(f"hosts a b\ncabling path\nrelay_budget {budget}\n")
+
+
+def test_layout_name_follows_the_content_not_the_file():
+    ring = topology.parse(RING4, path="/srv/site/ring4.topology")
+    assert ring.group.name == ring.layout_name and ring.layout_name.startswith("topology:")
+    assert "ring4" not in ring.layout_name
+    assert topology.parse(RING4, path="/etc/fabric-table/topology").layout_name == ring.layout_name
+    spelled = topology.parse("hosts node-0 node-1 node-2 node-3\ncabling explicit\n# the same cables\n"
+                             "cable 0.port1 3.port0\ncable 2.port0 3.port1\n"
+                             "cable 1.port0 2.port1\ncable 0.port0 1.port1\nrelay_budget 4096\n")
+    assert spelled.layout_name == ring.layout_name
+    assert topology.parse(PATH4).layout_name != topology.parse(RING4.replace("node-3", "node-9")).layout_name
+    assert topology.parse(RING4 + "port0 mlx5_0 mlx5_2\n").layout_name != ring.layout_name
+    assert topology.parse("hosts node-0 node-1 node-2 node-3\ncabling path\n").layout_name != ring.layout_name
 
 
 def test_refusals():

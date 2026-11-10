@@ -4,29 +4,40 @@ The file is the plugin's only route input
 (``transport-core/src/topology.c``); this parser
 accepts the same keys and defaults:
 
-- ``hosts <name> ...``: host names in position order;
+- ``hosts <name> ...``: host names in position order, at most 64, each of 1 to
+  63 bytes;
 - ``cabling ring`` / ``path`` / ``explicit``: ``ring`` cables host ``i``'s
   port 0 to host ``i+1``'s port 1 and the last host to the first; ``path``
-  leaves the closing cable out; ``explicit`` takes only ``cable`` lines;
+  leaves the closing cable out; ``explicit`` takes only ``cable`` lines. Two
+  hosts have one cable, ``0.port0-1.port1``, under ``ring`` as under ``path``;
+  a pair joined by two cables is written with ``explicit`` and two ``cable``
+  lines;
 - ``cable <i>.port<p> <j>.port<q>``: one cable (repeatable, ``explicit``);
+  the cables may join the hosts in any order and through either port, as
+  long as they form one path or one cycle;
 - ``port0 <fn> <fn>`` / ``port1 <fn> <fn>``: the RDMA functions of each port
   in lane order (lane 0 first). The defaults are the DGX OS names
   ``rocep1s0f0 roceP2p1s0f0`` and ``rocep1s0f1 roceP2p1s0f1``;
-- ``relay_budget <bytes>``: the plugin's window toward a relayed peer; the
-  tool carries it for reference (its own queue bound is the measured
-  512 KiB hairpin queue);
+- ``relay_budget <bytes>``: the plugin's window toward a relayed peer, in
+  ASCII decimal digits; the tool carries it for reference (its own queue
+  bound is the measured 512 KiB hairpin queue);
 - ``net-sircl-topology``: the file's optional first key, as the plugin reads it.
 
 :func:`load` returns a validated :class:`Topology` with immutable device bindings. Its
 :attr:`Topology.group` is the one group the tool plans: the fabric of the
 topology's cables over positions 0..N-1, whole cycle or path, with the
 relay-egress default (``same`` for a whole cycle,
-``sibling`` otherwise).
+``sibling`` otherwise). The group's layout name (:attr:`Topology.layout_name`)
+is derived from the hosts, cables and functions, not from the file's path, so
+the same topology read from two files names the same layout.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
+import re
 from pathlib import Path
 
 from . import model
@@ -36,17 +47,21 @@ DEFAULT_BUDGET = 393216          # 75 % of a ConnectX-7 hairpin queue of 512 KiB
 DEFAULT_FUNCTIONS = ("rocep1s0f0", "roceP2p1s0f0", "rocep1s0f1", "roceP2p1s0f1")
 DEFAULT_NETDEVS = ("enp1s0f0np0", "enP2p1s0f0np0", "enp1s0f1np1", "enP2p1s0f1np1")
 CABLING_KINDS = ("ring", "path", "explicit")
+MAX_HOSTS = 64                   # the plugin's position limit
+MAX_HOST_NAME_BYTES = 63         # the plugin stores a host name in 64 bytes
+_DECIMAL = re.compile(r"[0-9]+")
 
 
 @dataclasses.dataclass(frozen=True)
 class GroupSpec:
     """The one group a topology file describes.
 
-    ``ring_size`` bounds the forwarding trace: the
+    ``ring_size`` bounds a forwarding trace that is not given the fabric: the
     whole cycle is a ring of its own size, a path sits on a ring one Spark
     longer (the wrap position has no facts, so a frame that left the path's
-    end could never be delivered). The attribute names match the plan
-    derivation's group interface.
+    end could never be delivered). The plan's own trace follows the fabric's
+    cables instead. The attribute names match the plan derivation's group
+    interface.
     """
 
     layout: Layout
@@ -127,6 +142,20 @@ class Topology:
     def size(self) -> int:
         return len(self.hosts)
 
+    @property
+    def layout_name(self) -> str:
+        """The layout's name in reports and in the hosts' ownership record: a digest of the hosts, the
+        cables and the function names.
+
+        It does not depend on the file's path, on the order or spelling of the
+        ``cable`` lines or on the relay budget, so a workstation and a boot
+        unit that read copies of one topology write the same record.
+        """
+        cables = sorted(sorted([[cable.a, cable.a_port], [cable.b, cable.b_port]]) for cable in self.cables)
+        content = json.dumps({"hosts": list(self.hosts), "cables": cables, "functions": list(self.functions)},
+                             sort_keys=True, separators=(",", ":"))
+        return "topology:" + hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+
     def position_of(self, name: str) -> int:
         """The position of a host name, or -1 when the topology does not name it."""
         try:
@@ -187,7 +216,7 @@ def parse(text: str, *, path: str = "<topology>") -> Topology:
             for lane, name in enumerate(rest[:2]):
                 functions[2 * port + lane] = name
         elif key == "relay_budget":
-            if len(rest) != 1 or not rest[0].isdigit() or int(rest[0]) == 0:
+            if len(rest) != 1 or not _DECIMAL.fullmatch(rest[0]) or int(rest[0]) == 0:
                 raise FabricError(f"{path}:{lineno}: relay_budget is a positive byte count")
             budget = int(rest[0])
         elif key == "net-sircl-topology":
@@ -197,12 +226,18 @@ def parse(text: str, *, path: str = "<topology>") -> Topology:
             raise FabricError(f"{path}:{lineno}: unknown key {key}")
     if len(hosts) < 2:
         raise FabricError(f"{path}: `hosts` names fewer than two hosts")
+    if len(hosts) > MAX_HOSTS:
+        raise FabricError(f"{path}: `hosts` names {len(hosts)} hosts; at most {MAX_HOSTS} are supported")
+    for name in hosts:
+        if len(name.encode("utf-8")) > MAX_HOST_NAME_BYTES:
+            raise FabricError(f"{path}: host name {name!r} is longer than {MAX_HOST_NAME_BYTES} bytes")
     if len(set(hosts)) != len(hosts):
         raise FabricError(f"{path}: `hosts` names a host twice")
     if cabling not in CABLING_KINDS:
         raise FabricError(f"{path}: cabling is {', '.join(CABLING_KINDS)}")
     if cabling in ("ring", "path"):
-        last = len(hosts) if cabling == "ring" else len(hosts) - 1
+        # A pair has one cable between its two hosts: a two-host ring is a two-host path.
+        last = len(hosts) if cabling == "ring" and len(hosts) > 2 else len(hosts) - 1
         for i in range(last):
             cables.append(Cable(i, 0, (i + 1) % len(hosts), 1))
     if len(set(functions)) != 4:
@@ -242,7 +277,7 @@ def _group_of(topology: Topology) -> GroupSpec:
     fabric = Fabric(topology.cables)
     layout = Layout(fabric, tuple(range(topology.size)))
     egress = "same" if fabric.kind == "cycle" else "sibling"
-    return GroupSpec(layout, egress, f"topology:{Path(topology.path).name}", topology.bindings)
+    return GroupSpec(layout, egress, topology.layout_name, topology.bindings)
 
 
 def load(path: str | Path) -> Topology:

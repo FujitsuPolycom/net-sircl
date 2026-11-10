@@ -7,8 +7,9 @@ Commands and their safety classes:
 - ``facts`` (READ-ONLY REMOTE): read hosts and print the facts document;
 - ``status`` (READ-ONLY REMOTE): the relay objects every host holds;
 - ``apply`` (READ-ONLY REMOTE; MUTATES HOST with ``--execute``): compare each
-  host with its part of the plan and reconcile it; ``--boot`` installs missing
-  parts only (boot restore, never removes);
+  host with its part of the plan and reconcile it; ``--boot`` (boot restore)
+  installs missing parts, replaces a planned part that differs and removes
+  nothing the plan does not name;
 - ``verify`` (READ-ONLY REMOTE): compare every host with the plan and resolve
   every lane destination with ``ip route get``;
 - ``remove`` (READ-ONLY REMOTE; MUTATES HOST with ``--execute``): delete
@@ -321,8 +322,8 @@ def _command_install_boot(args: argparse.Namespace, topology: topology_mod.Topol
     for destination, _ in spec.files[:2]:
         print(f"input: {destination}")
     if not args.execute:
-        print("dry run: --execute copies this tool to /usr/local/lib, writes the files, enables the unit "
-              "and installs the table now")
+        print("dry run: --execute copies this tool to /usr/local/lib, writes the files, enables the unit, "
+              "installs the table now and starts the reconcile timer")
         return 0
     # Reject identity/ownership/facts blockers before persisting a boot service.
     hosts = _resolve_hosts(topology, args)
@@ -348,9 +349,18 @@ def _command_install_boot(args: argparse.Namespace, topology: topology_mod.Topol
         print(f"wrote {wrapper}")
     boot.install(spec, root=args.root, execute=True)
     print(f"enabled {boot.UNIT_NAME} and {boot.RECOVERY_TIMER}")
-    code = _apply_flow(args, topology, "boot", executor)
-    if code == 0 and args.root == "/":
-        subprocess.run(["systemctl", "start", boot.RECOVERY_TIMER], check=True)
+    # The units are installed: the timer runs whatever the apply below returns, so a failed check is retried.
+    code = None
+    try:
+        code = _apply_flow(args, topology, "boot", executor)
+    finally:
+        if args.root == "/":
+            subprocess.run(["systemctl", "start", boot.RECOVERY_TIMER], check=True)
+            print(f"started {boot.RECOVERY_TIMER}"
+                  + ("" if code == 0 else ": the apply above did not succeed"
+                     + (f" (exit {code})" if code is not None else "")
+                     + "; the timer retries it every 15 seconds, see the journals of "
+                     f"{boot.UNIT_NAME} and {boot.RECOVERY_SERVICE}"))
     return code
 
 
@@ -417,12 +427,15 @@ def _parser() -> argparse.ArgumentParser:
         if name in ("apply", "verify", "remove"):
             plan_facts(sub)
             relay_options(sub)
+            sub.add_argument("--verbose", action="store_true", help="also list unchanged objects")
+        if name in ("apply", "remove"):
+            # `verify` changes nothing, so it has nothing to adopt: it reports unowned objects as blockers.
             sub.add_argument("--adopt", action="store_true",
                              help="take over relay routes and neighbours that lack the ownership mark")
-            sub.add_argument("--verbose", action="store_true", help="also list unchanged objects")
         if name == "apply":
             sub.add_argument("--boot", action="store_true",
-                             help="restore semantics: install missing parts, never remove (the boot unit's mode)")
+                             help="restore semantics: install missing parts, replace planned parts that differ, "
+                                  "remove nothing the plan does not name (the boot unit's mode)")
             sub.add_argument("--execute", action="store_true", help="change the hosts (MUTATES HOST)")
             sub.add_argument("--no-scripts", action="store_true", help="omit the per-host scripts")
         elif name == "verify":

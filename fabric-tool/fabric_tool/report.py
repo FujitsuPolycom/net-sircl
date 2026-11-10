@@ -142,6 +142,8 @@ def render_outcome(outcome: Outcome, *, verbose: bool = False, scripts: bool = F
     lines = [f"group {group.label} ({group.name}, relay egress {group.relay_egress}); {outcome.mode}"]
     for problem in outcome.problems:
         lines.append(f"PROBLEM: {problem}")
+    for note in outcome.notes:
+        lines.append(f"NOTE: {note}")
     if outcome.plan is not None:
         plan = outcome.plan
         bound = (f"per-peer op sizes at or below {plan.per_peer_bytes} bytes (busiest relay queue "

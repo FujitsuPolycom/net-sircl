@@ -26,10 +26,21 @@ invalid:
   return ncclInvalidArgument;
 }
 
-static uint32_t oob_address(void) {
+/* The IPv4 address peers connect to for the connection exchange (network order). An explicit
+ * NET_SIRCL_OOB_ADDR that is not a usable IPv4 address fails initialization: falling back would
+ * advertise an address the user did not ask for. Without one, the first IPv4 address of the
+ * NCCL_SOCKET_IFNAME interface or prefix; without that, loopback, which only local tests can use. */
+static ncclResult_t oob_address(uint32_t *out) {
   const char *a = getenv("NET_SIRCL_OOB_ADDR");
-  struct in_addr in;
-  if (a && *a && inet_pton(AF_INET, a, &in) == 1) return in.s_addr;
+  if (a && *a) {
+    struct in_addr in;
+    if (inet_pton(AF_INET, a, &in) != 1 || in.s_addr == htonl(INADDR_ANY)) {
+      WARN("net-sircl: NET_SIRCL_OOB_ADDR must be this host's IPv4 address (got '%s')", a);
+      return ncclInvalidArgument;
+    }
+    *out = in.s_addr;
+    return ncclSuccess;
+  }
   const char *ifname = getenv("NCCL_SOCKET_IFNAME");
   if (ifname && *ifname && *ifname != '^' && *ifname != '=') {
     struct ifaddrs *list, *i;
@@ -39,10 +50,19 @@ static uint32_t oob_address(void) {
         if (i->ifa_addr && i->ifa_addr->sa_family == AF_INET && !strncmp(i->ifa_name, ifname, strlen(ifname)))
           found = ((struct sockaddr_in *)i->ifa_addr)->sin_addr.s_addr;
       freeifaddrs(list);
-      if (found) return found;
+      if (found) {
+        *out = found;
+        return ncclSuccess;
+      }
     }
   }
-  return htonl(INADDR_LOOPBACK);
+#ifndef NET_SIRCL_STANDIN
+  /* The stand-in runs every rank on one host, where loopback is the right address. */
+  WARN("net-sircl: no IPv4 address from NET_SIRCL_OOB_ADDR or NCCL_SOCKET_IFNAME (%s); advertising 127.0.0.1, "
+       "which peers on other hosts cannot reach", ifname && *ifname ? ifname : "unset");
+#endif
+  *out = htonl(INADDR_LOOPBACK);
+  return ncclSuccess;
 }
 
 static int in_list(const char *list, const char *name) {
