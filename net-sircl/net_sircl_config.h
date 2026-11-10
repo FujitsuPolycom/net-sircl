@@ -1,5 +1,7 @@
 /* Private configuration boundary: validated settings and topology-to-device binding. */
 /* -- settings -- */
+#ifdef NET_SIRCL_STANDIN
+/* Lenient parsing, for the stand-in's own test knob only; every plugin setting goes through env_range. */
 static long env_long(const char *name, long fallback) {
   const char *v = getenv(name);
   if (!v || !*v) return fallback;
@@ -7,6 +9,7 @@ static long env_long(const char *name, long fallback) {
   long x = strtol(v, &end, 10);
   return *end ? fallback : x;
 }
+#endif
 
 /* Reject malformed or overflowing QP fields before opening devices; never truncate to uint8_t. */
 static ncclResult_t env_range(const char *name, int fallback, int min, int max, int *out) {
