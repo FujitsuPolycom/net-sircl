@@ -1,4 +1,4 @@
 # Replace names. Port 0 -> next host's port 1, including last -> first.
-# Status: route derivation CPU-tested; not run on hardware.
+# Status: ran nccl-tests with the 0.1.0 transport; later builds are CPU-tested only on this layout.
 hosts node-0 node-1 node-2 node-3
 cabling ring

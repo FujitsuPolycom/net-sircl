@@ -17,7 +17,7 @@ the cap when nothing is in flight. This compatibility option is not the
 relayed admission policy. net-sircl
 atomically reserves separate forward and ACK credit and splits writes to fit.
 
-Version 0.1.1 exposes ABI 1. An incompatible public API or data-layout change
+Version 0.1.2 exposes ABI 1. An incompatible public API or data-layout change
 requires a new ABI number. This is separate from the plugin's wire version 6,
 which must agree between hosts.
 
@@ -25,7 +25,7 @@ which must agree between hosts.
 
 `SOURCE.json` records the distributed source inventory separately from upstream
 provenance and the historical 0.1.0 measurement hashes. The version macro and its
-test use 0.1.1; the ABI remains 1. The component version and ABI do not identify hardware-qualified source bytes.
+test use 0.1.2; the ABI remains 1. The component version and ABI do not identify hardware-qualified source bytes.
 The following code is research-only and is not part of the plugin's transport:
 
 - `transport-core/src/fabric.c` and `include/sircl_fabric.h`: collective planner
