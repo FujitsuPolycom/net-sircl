@@ -28,12 +28,24 @@ Rules:
 Script order: qdiscs, relay filters, neighbours, routes, marker restarts,
 removal of stale routes and neighbours, qdisc removal, record. A changed
 filter or marker is deleted and re-created, which interrupts the lanes that
-use it for well under a second; an unchanged object is not touched.
+use it for well under a second; an unchanged object is not touched. A script
+that adds ingress qdiscs first writes the record with every qdisc it is about
+to own, so a run that fails later still leaves their ownership recorded and
+``remove`` deletes them.
+
+Restore (``apply --boot``) adds what is missing and replaces a planned object
+that differs; it removes nothing the plan does not name: stale routes,
+neighbours, filters and qdiscs stay, and so do marker processes of a device
+without planned rules and marker-named processes without a device.
+
+An object that carries the ownership mark on a device outside the fabric's
+four is reported in a note and never touched.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import posixpath
 from collections.abc import Sequence
 
 from . import commands, model
@@ -98,6 +110,7 @@ class HostDiff:
 
 @dataclasses.dataclass
 class _Script:
+    record_first: list[str] = dataclasses.field(default_factory=list)
     qdisc_add: list[str] = dataclasses.field(default_factory=list)
     filter_del: list[str] = dataclasses.field(default_factory=list)
     filter_add: list[str] = dataclasses.field(default_factory=list)
@@ -111,7 +124,7 @@ class _Script:
     record: list[str] = dataclasses.field(default_factory=list)
 
     def lines(self, hostname: str, *, check_hostname: bool = True) -> list[str]:
-        body = (self.qdisc_add + self.filter_del + self.filter_add + self.neigh_set + self.route_set
+        body = (self.record_first + self.qdisc_add + self.filter_del + self.filter_add + self.neigh_set + self.route_set
                 + self.marker_stop + self.marker_start + self.route_del + self.neigh_del + self.qdisc_del
                 + self.record)
         if not body:
@@ -127,7 +140,8 @@ def _route_equal(entry: RouteEntry, destination: str, netdev: str, source: str) 
 
 
 def _route_removal(entry: RouteEntry, bindings: model.FabricBindings) -> str:
-    return commands.route_del(entry.destination, entry.dev, protocol=entry.protocol, metric=entry.metric, bindings=bindings)
+    return commands.route_del(entry.destination, entry.dev, protocol=entry.protocol, metric=entry.metric,
+                              prefixlen=entry.prefixlen, bindings=bindings)
 
 
 def _filter_removal(entries: Sequence[FilterEntry], bindings: model.FabricBindings) -> list[str]:
@@ -156,6 +170,13 @@ def _common_blockers(diff: HostDiff, state: HostState, *, check_hostname: bool) 
     if state.record is not None and state.record.get("group") != diff.group:
         diff.blockers.append(f"the host belongs to group {state.record.get('group')} (layout "
                              f"{state.record.get('layout')}); remove that group with `remove` first")
+    # The comparison reads and changes the bound network devices only. Where the host binds a function to
+    # another one, the tool's objects are on interfaces this run did not read.
+    for device, netdev in zip(state.bindings.devices, state.bindings.netdevs):
+        found = state.rdma.get(device)
+        if found and found != netdev:
+            diff.blockers.append(f"RDMA device {device} is network device {found} on this host, not {netdev}; "
+                                 "pass the facts file that names the host's interfaces (--facts)")
     return False
 
 
@@ -202,7 +223,14 @@ def _marker_blockers(state: HostState, marker: commands.MarkerConfig) -> list[st
 
 
 def _marker_changes(diff: HostDiff, script: _Script, state: HostState, host: HostPlan | None,
-                    marker: commands.MarkerConfig) -> None:
+                    marker: commands.MarkerConfig, *, remove_stale: bool = True) -> None:
+    """Marker processes to keep, start, replace or stop.
+
+    A device with planned rules gets exactly one marker with those rules from
+    the checked executable; processes there that differ are replaced. Marker
+    processes the plan has no rules for (their device has none, or they name
+    no device) are stopped only with ``remove_stale``; restore retains them.
+    """
     handled = set()
     for device in state.bindings.devices:
         planned = host.marker(device) if host is not None else None
@@ -215,22 +243,51 @@ def _marker_changes(diff: HostDiff, script: _Script, state: HostState, host: Hos
                 and present[0].problem is None and present[0].argv[:1] == (marker.path,):
             diff.changes.append(Change("marker", "keep", device, f"pid {present[0].pid}, {len(wanted)} rules"))
             continue
-        for process in present:
-            script.marker_stop.extend(commands.marker_stop(marker, process.pid))
         if wanted:
+            for process in present:
+                script.marker_stop.extend(commands.marker_stop(marker, process.pid))
             script.marker_start.extend(commands.marker_start(marker, device, planned.rules if planned else (), bindings=state.bindings))
             before = "; ".join(process.text() + ("" if process.argv[:1] == (marker.path,) else
                                                  f" (executable {process.argv[0]})") for process in present)
             diff.changes.append(Change("marker", "replace" if present else "add", device,
                                        f"{before} -> {rules_text}" if present else rules_text))
-        elif present:
+        elif present and remove_stale:
+            for process in present:
+                script.marker_stop.extend(commands.marker_stop(marker, process.pid))
             diff.changes.append(Change("marker", "remove", device, "; ".join(p.text() for p in present)))
+        elif present:
+            diff.notes.append(f"marker process(es) on {device}, which has no planned rules, are retained: "
+                              + "; ".join(p.text() for p in present))
     for process in state.markers:
-        if process.pid not in handled:
+        if process.pid in handled:
+            continue
+        if remove_stale:
             script.marker_stop.extend(commands.marker_stop(marker, process.pid))
             diff.changes.append(Change("marker", "remove", f"pid {process.pid}", process.text()))
+        else:
+            diff.notes.append(f"a marker process without a fabric RDMA device is retained: {process.text()}")
     if script.marker_start:
         diff.blockers.extend(_marker_blockers(state, marker))
+
+
+def _recorded_marker_blocker(diff: HostDiff, state: HostState, marker: commands.MarkerConfig) -> None:
+    """Stop a removal that would not find the host's marker processes.
+
+    Marker processes are found by the process name of ``--marker``. When the
+    record names an executable with another process name, ``remove`` would
+    leave its markers running as root and still report the host as clean.
+    """
+    recorded = state.record.get("marker") if state.record else None
+    if not isinstance(recorded, str) or posixpath.basename(recorded)[:15] == marker.comm:
+        return
+    try:
+        commands.MarkerConfig(recorded)
+    except model.FabricError:
+        diff.notes.append(f"the record names the marker executable {recorded!r}, which --marker cannot name; "
+                          "its marker processes, if any, are not found by this run")
+        return
+    diff.blockers.append(f"the record names the marker executable {recorded}; this run looks for processes "
+                         f"named {marker.comm} and would leave that marker's running; pass --marker {recorded}")
 
 
 def _record(host: HostPlan, plan: GroupPlan, layout_name: str, marker: commands.MarkerConfig,
@@ -269,6 +326,14 @@ def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan | None, *, layo
         return diff
     script = _Script()
     removed_filters = {netdev: 0 for netdev in state.bindings.netdevs}
+
+    def off_fabric(what: str, dev: str) -> bool:
+        """Whether a marked object sits on a device outside the fabric's four (noted, never touched)."""
+        if dev in state.bindings.netdevs:
+            return False
+        diff.notes.append(f"{what} carries the ownership mark on {dev or 'no device'}, which is not a fabric "
+                          "network device; it is not touched")
+        return True
 
     # Relay filters (reserved preferences) and the ingress qdiscs they need.
     added_qdiscs = []
@@ -323,7 +388,7 @@ def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan | None, *, layo
                       if _route_equal(entry, destination, route.netdev, route.source)), None)
         in_place = equal or next((entry for entry in candidates if entry.metric == 0), None)
         for entry in candidates if policy.remove_stale else ():
-            if entry is not in_place:
+            if entry is not in_place and not off_fabric(f"route {entry.text()}", entry.dev):
                 script.route_del.append(_route_removal(entry, state.bindings))
                 diff.changes.append(Change("route", "remove", f"{destination}/32", entry.text(), not entry.owned))
         if equal is not None:
@@ -337,9 +402,14 @@ def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan | None, *, layo
                                        f"{in_place.text()} -> {want}" if in_place else want,
                                        bool(in_place and not in_place.owned)))
     for entry in state.relay_routes():
-        if policy.remove_stale and entry.destination not in planned_routes:
-            script.route_del.append(_route_removal(entry, state.bindings))
-            diff.changes.append(Change("route", "remove", f"{entry.destination}/32", entry.text(), not entry.owned))
+        # A planned destination's /32 routes were handled above; every other owned or relay route is stale.
+        if not policy.remove_stale or (entry.prefixlen == 32 and entry.destination in planned_routes):
+            continue
+        if off_fabric(f"route {entry.text()}", entry.dev):
+            continue
+        script.route_del.append(_route_removal(entry, state.bindings))
+        diff.changes.append(Change("route", "remove", f"{entry.destination}/{entry.prefixlen}", entry.text(),
+                                   not entry.owned))
 
     planned_neighbours = {(route.destination, route.netdev): route.next_mac for route in host.routes}
     present_neighbours: dict[tuple[str, str], NeighbourEntry] = {}
@@ -357,32 +427,49 @@ def _reconcile(state: HostState, host: HostPlan, plan: GroupPlan | None, *, layo
         diff.changes.append(Change("neighbour", "replace" if entry else "add", f"{destination} dev {netdev}",
                                    f"{entry.mac} -> {mac}" if entry else mac, bool(entry and not entry.owned)))
     for (destination, netdev), entry in sorted(present_neighbours.items()) if policy.remove_stale else ():
+        if off_fabric(f"neighbour {entry.text()}", netdev):
+            continue
         script.neigh_del.append(commands.neigh_del(destination, netdev, bindings=state.bindings))
         diff.changes.append(Change("neighbour", "remove", f"{destination} dev {netdev}", entry.text(),
                                    not entry.owned))
 
-    _marker_changes(diff, script, state, host, marker)
+    _marker_changes(diff, script, state, host, marker, remove_stale=policy.remove_stale)
+    if not policy.persist_record:
+        _recorded_marker_blocker(diff, state, marker)
 
     # Qdiscs the record lists as added by the tool and that no filter needs any more.
     record = state.record if state.record and state.record.get("group") == group else None
-    recorded = set(record.get("qdiscs", [])) if record else set()
-    kept = set(added_qdiscs) | recorded
+    listed = record.get("qdiscs", []) if record else []
+    recorded = {netdev for netdev in listed if isinstance(netdev, str)} if isinstance(listed, list) else set()
+    owned = set(added_qdiscs) | recorded          # every ingress qdisc the tool owns while the script runs
+    kept = set(owned)
     for netdev in sorted(recorded) if policy.remove_stale else ():
+        if netdev not in state.bindings.netdevs:
+            diff.notes.append(f"the record lists an ingress qdisc on {netdev}, which is not a fabric network "
+                              "device of this run; it is not touched")
+            continue
         remaining = len(state.filters.get(netdev, [])) - removed_filters[netdev]
         if netdev not in host.filter_netdevs and remaining <= 0 and state.ingress_qdisc.get(netdev) == "ingress":
             script.qdisc_del.append(commands.qdisc_del(netdev, bindings=state.bindings))
             kept.discard(netdev)
             diff.changes.append(Change("qdisc", "remove", netdev, "ingress qdisc added by the tool"))
     wanted_record = None
+    written_first = None
     if policy.persist_record:
         assert plan is not None
         wanted_record = _record(host, plan, layout_name, marker, sorted(kept))
+        if added_qdiscs:
+            # Write-ahead: the script stops at its first failing command and the record is its last step, so
+            # a qdisc added by a run that failed later would belong to nobody and `remove` would leave it.
+            written_first = _record(host, plan, layout_name, marker, sorted(owned))
+            script.record_first.extend(commands.record_write(written_first))
     if state.record != wanted_record:
         if wanted_record is None:
             script.record.append(commands.record_remove())
             diff.changes.append(Change("record", "remove", commands.RECORD_PATH, f"group {group}"))
         else:
-            script.record.extend(commands.record_write(wanted_record))
+            if written_first != wanted_record:
+                script.record.extend(commands.record_write(wanted_record))
             before = f"group {state.record.get('group')}" if state.record else "none"
             diff.changes.append(Change("record", "write", commands.RECORD_PATH,
                                        f"{before} -> group {group}, layout {layout_name}, plan {plan.digest}"))

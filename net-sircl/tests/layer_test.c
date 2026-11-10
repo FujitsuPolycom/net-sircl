@@ -16,9 +16,18 @@
  *              returns within 2 s
  *   peerloss   the sender's process ends after connecting: the receiver's waiting request fails with
  *              ncclRemoteError within 5 s instead of waiting forever
- *   timeout    a listener that never accepts: connect fails within NET_SIRCL_CONNECT_TIMEOUT_MS (1.5 s) */
+ *   timeout    a listener that never accepts: connect fails within NET_SIRCL_CONNECT_TIMEOUT_MS (1.5 s)
+ *   stray      three connections that are not a peer reach the listener first (closed at once, 56 bytes that
+ *              are not metadata, silent until the deadline): each is dropped, and the peer's connection
+ *              behind them is accepted and carries a message
+ *   deepwindow a direct peer with a 64 MiB window and 4 KiB chunks sends 8 MiB (2048 chunks) while the
+ *              provider is slow: payload writes stop short of the 1024-entry send queue and resume as
+ *              completions arrive */
 #define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <signal.h>
+#include <sys/socket.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -270,6 +279,43 @@ static void windowed_send(void *comms[2]) {
   }
 }
 
+/* -- deepwindow: more chunks than the send queue holds -- */
+#define DEEP_WINDOW (64u << 20)
+#define DEEP_CHUNK 4096u
+#define DEEP_MSG (8u << 20)
+#define DEEP_QUEUE 1024u /* the plugin's send queue depth */
+
+static void deep_recv(void *comm) {
+  uint8_t *buf = region();
+  void *mr = NULL;
+  if (NET.regMr(comm, buf, REGION, NCCL_PTR_HOST, &mr) != ncclSuccess) die("regMr");
+  int got = -1;
+  wait_done(post_recv(comm, buf, DEEP_MSG, 7, mr), &got);
+  if (got != (int)DEEP_MSG) die("the deep-window receive reported the wrong size");
+  for (size_t j = 0; j < DEEP_MSG; ++j)
+    if (buf[j] != pattern(7, j)) die("a deep-window byte differs");
+  NET.deregMr(comm, mr);
+  free(buf);
+}
+
+static void deep_send(void *comm) {
+  uint8_t *buf = region();
+  void *mr = NULL;
+  if (NET.regMr(comm, buf, REGION, NCCL_PTR_HOST, &mr) != ncclSuccess) die("regMr");
+  for (size_t j = 0; j < DEEP_MSG; ++j) buf[j] = pattern(7, j);
+  wait_done(post_send(comm, buf, DEEP_MSG, 7, mr), NULL);
+  uint64_t max_inflight = 0, chunks = 0;
+  net_sircl_stats(comm, &max_inflight, &chunks);
+  if (chunks < DEEP_MSG / DEEP_CHUNK) die("the deep-window send was not chunked");
+  if (!max_inflight || max_inflight >= (uint64_t)DEEP_QUEUE * DEEP_CHUNK)
+    die("payload writes were not held below the send queue depth");
+  printf("net-sircl layer test deepwindow: %u MiB in %llu chunks exact; at most %llu chunks in flight below "
+         "a send queue of %u\n", DEEP_MSG >> 20, (unsigned long long)chunks,
+         (unsigned long long)(max_inflight / DEEP_CHUNK), DEEP_QUEUE);
+  NET.deregMr(comm, mr);
+  free(buf);
+}
+
 /* -- one message per comm, to show a connection carries data -- */
 static void one_recv(void *comm, int tag) {
   uint8_t *buf = malloc(4096);
@@ -306,11 +352,37 @@ static int receiver(int to_child, int from_child) {
     setenv("NET_SIRCL_ROUTES", "5=emu0/emu1", 1);
   }
   if (!strcmp(mode, "directlanes")) setenv("NET_SIRCL_STANDIN_DEVICES", "3", 1);
+  if (!strcmp(mode, "stray")) setenv("NET_SIRCL_CONNECT_TIMEOUT_MS", "1000", 1); /* the silent stray's wait */
   void *ctx = init();
   char handles[3][H];
   void *listen[3], *comms[3] = {NULL, NULL, NULL};
   for (int i = 0; i < listens; ++i)
     if (NET.listen(ctx, 0, handles[i], &listen[i]) != ncclSuccess) die("listen");
+  int strays[2] = {-1, -1};
+  if (!strcmp(mode, "stray")) {
+    /* Queued ahead of the peer, which has not been told the port yet. */
+    struct net_sircl_handle h;
+    memcpy(&h, handles[0], sizeof h);
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sin_family = AF_INET;
+    sa.sin_port = h.port;
+    sa.sin_addr.s_addr = h.addr;
+    for (int k = 0; k < 3; ++k) {
+      int fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (fd < 0 || connect(fd, (struct sockaddr *)&sa, sizeof sa)) die("a stray connection");
+      if (k == 0) {
+        close(fd); /* a probe: connects and leaves */
+        continue;
+      }
+      if (k == 1) { /* bytes that are not net-sircl metadata */
+        char junk[sizeof(struct net_sircl_meta)];
+        memset(junk, 0x5a, sizeof junk);
+        if (write(fd, junk, sizeof junk) != (ssize_t)sizeof junk) die("stray bytes");
+      }
+      strays[k - 1] = fd; /* k == 2 stays silent until the listener's deadline */
+    }
+  }
   send_handles(to_child, handles, listens);
   if (!strcmp(mode, "timeout")) {
     int status = 0;
@@ -324,6 +396,13 @@ static int receiver(int to_child, int from_child) {
     plain_recv(comms[0]);
   } else if (!strcmp(mode, "windowed")) {
     windowed_recv(comms);
+  } else if (!strcmp(mode, "stray")) {
+    one_recv(comms[0], 40);
+    for (int k = 0; k < 2; ++k) close(strays[k]);
+    printf("net-sircl layer test stray: 3 stray connections dropped; the peer behind them was accepted and "
+           "its message is exact\n");
+  } else if (!strcmp(mode, "deepwindow")) {
+    deep_recv(comms[0]);
   } else if (!strcmp(mode, "lanes") || !strcmp(mode, "directlanes")) {
     for (int i = 0; i < 3; ++i) {
       char name[64];
@@ -401,6 +480,14 @@ static int sender(int from_parent, int to_parent) {
   }
   if (!strcmp(mode, "directlanes")) setenv("NET_SIRCL_STANDIN_DEVICES", "3", 1);
   if (!strcmp(mode, "timeout")) setenv("NET_SIRCL_CONNECT_TIMEOUT_MS", "1500", 1);
+  if (!strcmp(mode, "deepwindow")) {
+    char w[32];
+    snprintf(w, sizeof w, "0=%u", DEEP_WINDOW);
+    setenv("NET_SIRCL_WINDOWS", w, 1);          /* a direct peer, explicitly windowed */
+    snprintf(w, sizeof w, "%u", DEEP_CHUNK);
+    setenv("NET_SIRCL_CHUNK", w, 1);
+    setenv("SIRCL_EMU_LATENCY_NS", "2000000", 1); /* every chunk is posted before the first one completes */
+  }
   void *ctx = init();
   char handles[3][H];
   read_handles(from_parent, handles, listens);
@@ -438,6 +525,10 @@ static int sender(int from_parent, int to_parent) {
     plain_send(comms[0]);
   } else if (!strcmp(mode, "windowed")) {
     windowed_send(comms);
+  } else if (!strcmp(mode, "stray")) {
+    one_send(comms[0], 40);
+  } else if (!strcmp(mode, "deepwindow")) {
+    deep_send(comms[0]);
   } else if (!strcmp(mode, "teardown")) {
     uint8_t *buf = region();
     void *mr = NULL;
@@ -465,11 +556,13 @@ static int sender(int from_parent, int to_parent) {
 }
 
 int main(int argc, char **argv) {
-  static const char *const modes[] = {"plain", "windowed", "lanes", "directlanes", "teardown", "peerloss", "timeout"};
+  static const char *const modes[] = {"plain", "windowed", "lanes", "directlanes", "teardown", "peerloss", "timeout",
+                                      "stray", "deepwindow"};
   int known = 0;
   for (size_t i = 0; argc == 2 && i < sizeof modes / sizeof modes[0]; ++i) known |= !strcmp(argv[1], modes[i]);
   if (!known) {
-    fprintf(stderr, "usage: %s plain|windowed|lanes|directlanes|teardown|peerloss|timeout\n", argv[0]);
+    fprintf(stderr, "usage: %s plain|windowed|lanes|directlanes|teardown|peerloss|timeout|stray|deepwindow\n",
+            argv[0]);
     return 2;
   }
   mode = argv[1];

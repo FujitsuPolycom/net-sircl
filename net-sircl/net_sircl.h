@@ -16,44 +16,55 @@
  *   with separate ACK debt when both resources permit control-pair progress;
  *   otherwise the base route or B/(N-2) aggregate policy remains. Shares round down.
  *   Forward traffic plus reverse ACKs stays below 7/8 of an assumed 512 KiB queue at default B.
- *   Direct peers keep unwindowed sends. See README "Relay window" for the capacity assumptions.
+ *   Direct peers keep unwindowed sends. See ROUTE-ALLOWANCE.md for the capacity assumptions.
  *
  * Routes. A peer position's route lists the local functions of its lanes (up to two, lane order). The
  * connector keeps NCCL's device when it is one of them (NCCL spreads channels over its devices, which keeps
  * both PCI functions of a cable busy), else takes the lanes in turn; it sends its lane, and the acceptor uses
  * the same lane of its own route, so both ends are the same function class on the same path.
  *
- * Settings (environment, read at init):
+ * Settings (environment, read at init; docs/configuration.md is the reference). Numeric settings take
+ * decimal digits only; a malformed or out-of-range value fails initialization and names the setting.
  *   NET_SIRCL_TOPOLOGY      required topology file (below): routes for every peer, this host's position
  *                           from its host name
  *   NET_SIRCL_POSITION      this process's position (overrides the topology file's host-name match)
- *   NET_SIRCL_ROUTES        <position>=<function>[/<function>],... lanes per peer (SIRCL_PEER_ROUTES format);
- *                           must match the topology lanes
+ *   NET_SIRCL_ROUTES        <position>=<function>/<function>,... both lanes per peer (SIRCL_PEER_ROUTES
+ *                           format); must match the topology lanes exactly
  *   NET_SIRCL_WINDOWS       <position>=<bytes>,... optional direct-peer payload cap per function;
  *                           relayed entries can only lower every function's source allowance
  *   NET_SIRCL_RELAY_BUDGET  directional charged-byte budget, default 327680, range 65536..327680
  *   NET_SIRCL_IB_TIMEOUT    RC ACK timeout exponent, default 20, decimal 1..31 (direct and relayed)
  *   NET_SIRCL_IB_RETRY_CNT  RC retry count, default 7, decimal 0..7
  *   NET_SIRCL_HCA           comma list of RDMA functions to expose (default: every active RoCE function)
- *   NET_SIRCL_GID_INDEX     GID index (default: the function's RoCE v2 IPv4 GID, found in sysfs)
- *   NET_SIRCL_CHUNK         maximum payload bytes per signaled windowed chunk (default 65536);
- *                           shrinks to available credit and half the allowance when two 4 KiB pieces fit
- *   NET_SIRCL_OOB_ADDR      IPv4 address for the connection exchange (default: NCCL_SOCKET_IFNAME's first
- *                           IPv4 address, else 127.0.0.1)
- *   NET_SIRCL_CONNECT_TIMEOUT_MS  connect/accept deadline (default 60000)
+ *   NET_SIRCL_GID_INDEX     GID index 0..255 (default: the function's RoCE v2 IPv4 GID, found in sysfs)
+ *   NET_SIRCL_CHUNK         maximum payload bytes per signaled windowed chunk (default 65536, at least
+ *                           4096); shrinks to available credit and half the allowance when two 4 KiB
+ *                           pieces fit
+ *   NET_SIRCL_OOB_ADDR      this host's IPv4 address for the connection exchange (default:
+ *                           NCCL_SOCKET_IFNAME's first IPv4 address, else 127.0.0.1 with a warning)
+ *   NET_SIRCL_CONNECT_TIMEOUT_MS    connect/accept deadline (default 60000)
+ *   NET_SIRCL_REQUEST_TIMEOUT_MS    deadline for this host's own transport progress on a request: a send
+ *                                   from its clear-to-send to completion, a receive's clear-to-send post
+ *                                   (default 60000)
+ *   NET_SIRCL_PEER_WAIT_TIMEOUT_MS  optional deadline for the peer application to post its matching
+ *                                   request (default 0: wait, as NCCL does)
+ *   NET_SIRCL_CHANNELS      the bundled tuner's collective channel limit (net_sircl_tuner.h, docs/channels.md)
+ *   NET_SIRCL_PROFILE       output prefix that enables cumulative profiling (PROFILING.md)
  *   NET_SIRCL_RELAXED_ORDERING    1 (default) registers memory with IBV_ACCESS_RELAXED_ORDERING
  *   NET_SIRCL_ROUTE_CHECK   1 (default) refuses a peer this function's interface has no route to
  *   NET_SIRCL_SPEED_MBPS    the speed each device reports to NCCL's tuner (default 100000)
- *   NET_SIRCL_TC            RoCE traffic class (default 0)
+ *   NET_SIRCL_TC            RoCE traffic class 0..255 (default 0)
  *
- * Topology file (text; `#` starts a comment):
- *   hosts <name0> <name1> ...      host names in position order (positions 0, 1, ...)
- *   cabling ring|path|explicit     ring/path: host i's port 0 is cabled to host i+1's port 1 (path: no
- *                                  cable from the last host back to the first)
+ * Topology file (text; `#` starts a comment; anything not listed here is refused):
+ *   hosts <name0> <name1> ...      host names in position order (positions 0, 1, ...), 2 to 64 of them
+ *   cabling ring|path|explicit     required. ring/path: host i's port 0 is cabled to host i+1's port 1
+ *                                  (path: no cable from the last host back to the first; two hosts: the
+ *                                  one cable 0.port0-1.port1 either way)
  *   cable <i>.port<p> <j>.port<q>  one cable (repeatable; with `cabling explicit`, or added to ring/path)
  *   port0 <function> <function>    the functions of port 0, lane order (default rocep1s0f0 roceP2p1s0f0)
  *   port1 <function> <function>    the functions of port 1 (default rocep1s0f1 roceP2p1s0f1)
  *   relay_budget <bytes>           directional budget ceiling (default 393216), limited by the environment
+ * Every host must be cabled, and the cables must join the hosts into one path or one cycle.
  *
  * NVIDIA NCCL's plugin headers (nccl/, Apache-2.0) are vendored unchanged from tag v2.32.3-1,
  * plugins/net/example/nccl/; see NOTICE. */

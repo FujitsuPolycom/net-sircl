@@ -2,6 +2,7 @@
  * Link wrappers observe the provider boundary without changing the shared emulator. */
 #include "../net_sircl.c"
 #include <assert.h>
+#include <sys/wait.h>
 
 static struct ibv_qp_attr observed;
 static int rts_calls, injected_status;
@@ -150,6 +151,89 @@ int main(void) {
       assert(!badctx && !g.refs && !g.ndevs);
     }
     setting(deadlines[d], NULL);
+  }
+  /* The peer-wait bound is optional: unset or 0 waits for the peer application as NCCL does. */
+  const char *invalid_peer_waits[] = {"", "-1", "+1", " 100", "1x", "2147483648"};
+  for (unsigned i = 0; i < sizeof invalid_peer_waits / sizeof invalid_peer_waits[0]; ++i) {
+    setting("NET_SIRCL_PEER_WAIT_TIMEOUT_MS", invalid_peer_waits[i]);
+    void *badctx = NULL;
+    assert(sircl_init(&badctx, 0, NULL, capture, NULL) == ncclInvalidArgument);
+    assert(!badctx && !g.refs && !g.ndevs);
+    assert(strstr(last_log, "NET_SIRCL_PEER_WAIT_TIMEOUT_MS"));
+  }
+  const char *peer_waits[] = {NULL, "0", "250"};
+  for (unsigned i = 0; i < 3; ++i) {
+    setting("NET_SIRCL_PEER_WAIT_TIMEOUT_MS", peer_waits[i]);
+    void *okctx = NULL;
+    assert(sircl_init(&okctx, 0, NULL, capture, NULL) == ncclSuccess);
+    assert(g.peer_wait_timeout_ms == (i == 2 ? 250 : 0) && g.request_timeout_ms == 60000);
+    assert(sircl_finalize(okctx) == ncclSuccess);
+  }
+  setting("NET_SIRCL_PEER_WAIT_TIMEOUT_MS", NULL);
+  /* Settings that used to fall back to their default, or be truncated, fail initialization by name. */
+  const char *rejected[][2] = {
+    {"NET_SIRCL_CHUNK", "0"}, {"NET_SIRCL_CHUNK", "-1"}, {"NET_SIRCL_CHUNK", "64k"},
+    {"NET_SIRCL_CHUNK", "1073741825"}, {"NET_SIRCL_SPEED_MBPS", "0"}, {"NET_SIRCL_SPEED_MBPS", "fast"},
+    {"NET_SIRCL_TC", "256"}, {"NET_SIRCL_TC", "-1"}, {"NET_SIRCL_RELAXED_ORDERING", "2"},
+    {"NET_SIRCL_RELAXED_ORDERING", "yes"}, {"NET_SIRCL_ROUTE_CHECK", "2"}, {"NET_SIRCL_GID_INDEX", "256"},
+    {"NET_SIRCL_GID_INDEX", "-1"}, {"NET_SIRCL_GID_INDEX", ""}, {"NET_SIRCL_OOB_ADDR", "not-an-address"},
+    {"NET_SIRCL_OOB_ADDR", "10.0.0.300"}, {"NET_SIRCL_OOB_ADDR", "0.0.0.0"},
+  };
+  for (unsigned i = 0; i < sizeof rejected / sizeof rejected[0]; ++i) {
+    int oob = !strcmp(rejected[i][0], "NET_SIRCL_OOB_ADDR");
+    setting(rejected[i][0], rejected[i][1]);
+    void *badctx = NULL;
+    assert(sircl_init(&badctx, 0, NULL, capture, NULL) == ncclInvalidArgument);
+    assert(!badctx && !g.refs && !g.ndevs);
+    assert(strstr(last_log, rejected[i][0]));
+    setting(rejected[i][0], oob ? "127.0.0.1" : NULL);
+  }
+  {
+    /* Accepted edges: the chunk floor and ceiling, and both ends of the small ranges. */
+    setting("NET_SIRCL_CHUNK", "1");
+    setting("NET_SIRCL_TC", "255");
+    setting("NET_SIRCL_GID_INDEX", "0");
+    setting("NET_SIRCL_ROUTE_CHECK", "0");
+    setting("NET_SIRCL_RELAXED_ORDERING", "0");
+    void *okctx = NULL;
+    assert(sircl_init(&okctx, 0, NULL, capture, NULL) == ncclSuccess);
+    assert(g.chunk == 4096 && g.traffic_class == 255 && !g.route_check && !g.relaxed_ordering);
+    assert(sircl_finalize(okctx) == ncclSuccess);
+    setting("NET_SIRCL_CHUNK", "1073741824");
+    setting("NET_SIRCL_TC", NULL);
+    setting("NET_SIRCL_GID_INDEX", NULL);
+    setting("NET_SIRCL_ROUTE_CHECK", NULL);
+    setting("NET_SIRCL_RELAXED_ORDERING", NULL);
+    assert(sircl_init(&okctx, 0, NULL, capture, NULL) == ncclSuccess);
+    assert(g.chunk == 1u << 30 && g.traffic_class == 0 && g.route_check == 1 && g.relaxed_ordering == 1);
+    assert(sircl_finalize(okctx) == ncclSuccess);
+    setting("NET_SIRCL_CHUNK", NULL);
+  }
+  {
+    /* A forked child (a data-loader worker) inherits the host claim's descriptor. It must not keep the
+     * claim: the parent can finalize and initialize again while the child still lives. */
+    void *owner = NULL;
+    assert(sircl_init(&owner, 0, NULL, capture, NULL) == ncclSuccess);
+    assert(g.owner_fd >= 0);
+    int hold[2];
+    assert(!pipe(hold));
+    pid_t child = fork();
+    assert(child >= 0);
+    if (!child) {
+      char b;
+      close(hold[1]);
+      _exit(g.owner_fd < 0 && read(hold[0], &b, 1) == 0 ? 0 : 1); /* lives until the parent is done */
+    }
+    close(hold[0]);
+    assert(sircl_finalize(owner) == ncclSuccess);
+    owner = NULL;
+    ncclResult_t again = sircl_init(&owner, 0, NULL, capture, NULL);
+    if (again != ncclSuccess) fprintf(stderr, "re-init after fork: %d: %s\n", (int)again, last_log);
+    assert(again == ncclSuccess); /* refused for as long as the child lives if it kept the claim */
+    assert(sircl_finalize(owner) == ncclSuccess);
+    close(hold[1]);
+    int status = 0;
+    assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && !WEXITSTATUS(status));
   }
   setting("NCCL_IB_TIMEOUT", "13");
   setting("NCCL_IB_RETRY_CNT", "2");

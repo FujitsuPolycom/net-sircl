@@ -133,8 +133,8 @@ static ncclResult_t route_check(struct comm *c, const struct net_sircl_meta *r) 
 #else
   struct dev *dv = &g.devs[c->dev];
   static const uint8_t mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
-  if (!dv->netdev[0] || memcmp(r->gid, mapped, 12) || !env_long("NET_SIRCL_ROUTE_CHECK", 1)) return ncclSuccess;
-  int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (!dv->netdev[0] || memcmp(r->gid, mapped, 12) || !g.route_check) return ncclSuccess;
+  int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
   if (fd < 0) return ncclSuccess;
   ncclResult_t result = ncclSuccess;
   if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, dv->netdev, (socklen_t)strlen(dv->netdev)) == 0) {
@@ -237,15 +237,22 @@ static ncclResult_t sircl_listen(void *ctx, int d, void *handle, void **listenCo
   if (d < 0 || d >= g.ndevs) return ncclInvalidArgument;
   struct net_sircl_handle *h = handle;
   memset(handle, 0, NCCL_NET_HANDLE_MAXSIZE);
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0) return ncclSystemError;
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof sa);
   sa.sin_family = AF_INET;
-  sa.sin_addr.s_addr = htonl(INADDR_ANY);
+  /* Listen only on the address peers are told to connect to. An advertised address this host does not
+   * own (address translation in front of it) still needs every interface. */
+  sa.sin_addr.s_addr = g.oob_addr;
   socklen_t len = sizeof sa;
-  if (bind(fd, (struct sockaddr *)&sa, sizeof sa) || listen(fd, 128) ||
-      getsockname(fd, (struct sockaddr *)&sa, &len) || set_nonblocking(fd)) {
+  int bound = bind(fd, (struct sockaddr *)&sa, sizeof sa);
+  if (bound && errno == EADDRNOTAVAIL) {
+    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    bound = bind(fd, (struct sockaddr *)&sa, sizeof sa);
+  }
+  if (bound || listen(fd, 128) || getsockname(fd, (struct sockaddr *)&sa, &len) || set_nonblocking(fd)) {
+    WARN("net-sircl: listening for the connection exchange: %s", strerror(errno));
     close(fd);
     return ncclSystemError;
   }
@@ -289,7 +296,10 @@ static ncclResult_t sircl_connect(void *ctx, int d, void *handle, void **sendCom
     WARN("net-sircl: handle magic %08x version %u", h->magic, h->version);
     return ncclInvalidArgument;
   }
-  if (!route_of(h->position)) return ncclInvalidArgument;
+  if (!route_of(h->position)) {
+    WARN("net-sircl: NET_SIRCL_TOPOLOGY gives position %d no route to position %d", g.position, h->position);
+    return ncclInvalidArgument;
+  }
   struct pending *p = (struct pending *)(uintptr_t)h->pending;
   if (!p) {
     p = calloc(1, sizeof *p);
@@ -297,7 +307,7 @@ static ncclResult_t sircl_connect(void *ctx, int d, void *handle, void **sendCom
     p->deadline_ms = now_ms() + g.connect_timeout_ms;
     int lane = -1;
     p->dev = connect_dev(h->position, d, &lane);
-    p->fd = socket(AF_INET, SOCK_STREAM, 0);
+    p->fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (p->fd < 0 || set_nonblocking(p->fd)) return connect_fail(h, p, ncclSystemError);
     int one = 1;
     setsockopt(p->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
@@ -363,14 +373,28 @@ static ncclResult_t accept_fail(struct listen_comm *l, ncclResult_t r) {
   return r;
 }
 
+/* A connection that never identifies itself as a net-sircl peer (a port scan, a health probe, a
+ * connector that ended before its metadata) is dropped and the listener keeps accepting. Only a peer
+ * that sent valid metadata can fail the accept; a connector that gave up reports its own error. */
+static ncclResult_t accept_drop(struct listen_comm *l, const char *why) {
+  WARN("net-sircl: dropped a connection to the listener of %s: %s", g.devs[l->dev].name, why);
+  pending_drop(l->accepting);
+  l->accepting = NULL;
+  return ncclSuccess;
+}
+
 static ncclResult_t sircl_accept(void *listenComm, void **recvComm, ncclNetDeviceHandle_v12_t **recvDevComm) {
   (void)recvDevComm;
   *recvComm = NULL;
   struct listen_comm *l = listenComm;
   struct pending *p = l->accepting;
   if (!p) {
-    int fd = accept(l->fd, NULL, NULL);
-    if (fd < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? ncclSuccess : ncclSystemError;
+    int fd = accept4(l->fd, NULL, NULL, SOCK_CLOEXEC);
+    if (fd < 0) {
+      /* The connection ended while it was queued: not this listener's failure. */
+      return (errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED || errno == EINTR) ? ncclSuccess
+                                                                                                    : ncclSystemError;
+    }
     p = calloc(1, sizeof *p);
     if (!p) {
       close(fd);
@@ -383,14 +407,17 @@ static ncclResult_t sircl_accept(void *listenComm, void **recvComm, ncclNetDevic
     l->accepting = p;
   }
   if (now_ms() > p->deadline_ms) {
+    if (p->state == P_WAIT_META) return accept_drop(l, "no metadata before the connect deadline");
     WARN("net-sircl: accepting a connection timed out after %d ms (NET_SIRCL_CONNECT_TIMEOUT_MS)",
          g.connect_timeout_ms);
     return accept_fail(l, ncclSystemError);
   }
   if (p->state == P_WAIT_META) {
     int r = recv_some(p->fd, &p->theirs, sizeof p->theirs, &p->got);
-    if (r < 0) return accept_fail(l, ncclRemoteError);
+    if (r < 0) return accept_drop(l, "closed before sending its metadata");
     if (r == 0) return ncclSuccess;
+    /* Checked before any queue pair is created for it. */
+    if (p->theirs.magic != NET_SIRCL_MAGIC) return accept_drop(l, "not a net-sircl peer");
     p->c = comm_create(accept_dev(p->theirs.position, p->theirs.lane, l->dev), 0);
     if (!p->c) return accept_fail(l, ncclSystemError);
     p->c->lane = p->theirs.lane;

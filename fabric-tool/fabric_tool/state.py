@@ -6,12 +6,13 @@ The read script (:func:`.commands.read_script`) prints ``@@<section>`` blocks:
 the host name, the iproute2 versions, ``ip -j addr show``, the network device
 of each RDMA device, ``ip -j -d route show table main``,
 ``ip -j neigh show nud permanent``, ``tc -j qdisc show`` and
-``tc -j filter show ... ingress`` of the four fabric network devices, the
-marker processes (``pgrep -a -x``), the marker executable's SHA-256, the
+``tc -j filter show ... ingress`` of the four fabric network devices, root's
+marker processes (``pgrep -a -x -U 0 -u 0``), the marker executable's SHA-256, the
 digest its install recorded, the owner and mode of the executable, that
 record and every directory above them, the head
 of every marker log, the tool's record and SparkRing's installer record.
-:func:`parse` turns them into a :class:`HostState`.
+:func:`parse` turns them into a :class:`HostState`. A missing tool or a failed
+read is a parse problem (:func:`read_failures`), never an empty section.
 
 Classification of what the host holds:
 
@@ -265,12 +266,14 @@ def parse_routes(text: str, problems: list[str]) -> list[RouteEntry]:
             address, length = "0.0.0.0", 0
         elif "/" in destination:
             address, _, length_text = destination.partition("/")
-            length = int(length_text) if length_text.isdigit() else -1
+            length = int(length_text) if length_text.isascii() and length_text.isdigit() else -1
         else:
             address, length = destination, 32
         try:
             ipaddress.IPv4Address(address)
         except ValueError:
+            continue
+        if not 0 <= length <= 32:
             continue
         protocol_text = str(entry.get("protocol", "boot"))
         found.append(RouteEntry(address, length, str(entry.get("dev", "")), entry.get("prefsrc"),
@@ -283,6 +286,11 @@ def parse_routes(text: str, problems: list[str]) -> list[RouteEntry]:
 def parse_neighbours(text: str, problems: list[str]) -> list[NeighbourEntry]:
     found = []
     for entry in _json_list(text, "ip -j neigh show", problems):
+        # The read lists every address family; like the routes, only IPv4 entries can be relay objects.
+        try:
+            ipaddress.IPv4Address(str(entry.get("dst", "")))
+        except ValueError:
+            continue
         states = entry.get("state", [])
         states = tuple(states) if isinstance(states, list) else (str(states),)
         protocol_text = str(entry.get("protocol", "")) if entry.get("protocol") is not None else ""
@@ -520,17 +528,65 @@ class HostState:
                 [neighbour for neighbour in self.relay_neighbours() if not neighbour.owned])
 
 
-def parse_sections(stdout: str) -> dict[str, str]:
-    """``@@<name>`` blocks of a script's output, by name."""
+def parse_sections(stdout: str, repeated: list[str] | None = None) -> dict[str, str]:
+    """``@@<name>`` blocks of a script's output, by name.
+
+    The first block of a name is the section. A later header of the same name
+    never replaces it: the lines under it are dropped and the name is appended
+    to ``repeated``, so output printed inside a later section cannot rewrite
+    an earlier one.
+    """
     sections: dict[str, list[str]] = {}
     current = None
     for line in stdout.splitlines():
         if line.startswith(commands.SECTION):
-            current = line[len(commands.SECTION):].strip()
-            sections[current] = []
+            name = line[len(commands.SECTION):].strip()
+            if name in sections:
+                current = None
+                if repeated is not None and name not in repeated:
+                    repeated.append(name)
+            else:
+                current = name
+                sections[current] = []
         elif current is not None:
             sections[current].append(line)
     return {key: "\n".join(value) for key, value in sections.items()}
+
+
+def _exit_status(raw: Mapping[str, str], section: str) -> int | None:
+    """The exit status the read script recorded for ``section``; None when it recorded none."""
+    words = raw.get(commands.STATUS_PREFIX + section, "").split()
+    return int(words[0]) if len(words) == 1 and words[0].isascii() and words[0].isdigit() else None
+
+
+def read_failures(raw: Mapping[str, str], bindings: model.FabricBindings) -> list[str]:
+    """Reads whose empty output must not be taken for a host that holds nothing.
+
+    A tool the read account cannot run; a failed read of the addresses, the
+    routes or the permanent neighbours; a ``tc`` that could not be executed
+    (exit 126 or 127; any other failure of ``tc`` is how a device without an
+    ingress qdisc may answer, so it is not judged); and a ``pgrep`` that
+    failed (exit 1 only says that no process matched).
+    """
+    found = [f"the read account cannot run {tool}: it is not on its PATH, so nothing {tool} reports was read"
+             for tool in commands.READ_TOOLS if tool in raw.get("tools", "").split()]
+    for section, command in (("links", "ip -j addr show"), ("routes", "ip -j -d route show table main"),
+                             ("neighbours", "ip -j neigh show nud permanent")):
+        status = _exit_status(raw, section)
+        if status != 0:
+            found.append(f"{command} " + (f"failed with exit status {status}" if status is not None
+                                          else "reported no exit status") + "; its output was not read")
+    for netdev in bindings.netdevs:
+        for section, command in ((f"qdisc:{netdev}", f"tc -j qdisc show dev {netdev}"),
+                                 (f"filters:{netdev}", f"tc -j filter show dev {netdev} ingress")):
+            status = _exit_status(raw, section)
+            if status in (126, 127):
+                found.append(f"{command} could not be executed (exit status {status}); its output was not read")
+    status = _exit_status(raw, "markers")
+    if status not in (0, 1):
+        found.append("pgrep " + (f"failed with exit status {status}" if status is not None
+                                 else "reported no exit status") + "; the marker processes were not read")
+    return found
 
 
 def _parse_record(text: str, schema: str, problems: list[str], what: str) -> dict | None:
@@ -550,7 +606,8 @@ def _parse_record(text: str, schema: str, problems: list[str], what: str) -> dic
 def parse(position: int, name: str, ssh: str, *, returncode: int, stdout: str, stderr: str, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> HostState:
     """The :class:`HostState` of one host from its read script's output."""
     state = HostState(position, name, ssh, reachable=True, bindings=bindings)
-    sections = parse_sections(stdout)
+    repeated: list[str] = []
+    sections = parse_sections(stdout, repeated)
     if "end" not in sections:
         state.reachable = bool(sections)
         detail = (stderr.strip().splitlines() or [f"exit code {returncode}"])[-1]
@@ -561,6 +618,10 @@ def parse(position: int, name: str, ssh: str, *, returncode: int, stdout: str, s
     state.raw = sections
     raw = state.raw
     problems = state.parse_problems
+    # No read prints a section header twice: a repeated one is output that imitates the script.
+    problems.extend(f"the read printed the section {section!r} more than once; only the first was used"
+                    for section in repeated)
+    problems.extend(read_failures(raw, bindings))
     state.hostname = raw.get("hostname", "").strip()
     state.versions = " | ".join(line.strip() for line in raw.get("versions", "").splitlines() if line.strip())
     state.links = parse_links(raw.get("links", ""), problems)

@@ -1,0 +1,89 @@
+# net-sircl: changes after 0.1.2 (unreleased)
+
+Status: **CPU-tested only.** Nothing here has run on DGX Sparks. The plugin,
+transport-core and fabric-tool sources on this branch differ from the `v0.1.2`
+tag (they already did after the merge of the resource-ownership work), so the
+0.1.2 hardware qualification does not cover this tree; see
+[qualification](docs/qualification.md). The `VERSION` files still read 0.1.2
+and 0.1.1 until a release is cut. Wire version remains **6** and the wire
+structures are unchanged; every host of a job must run the same build.
+
+## Behaviour that changes for users
+
+- **A rank that is late is waited for.** `NET_SIRCL_REQUEST_TIMEOUT_MS` now
+  bounds only this host's own transport progress (a send from its
+  clear-to-send to completion, and a receive's clear-to-send post). Waiting
+  for the peer application to post its matching request has no deadline by
+  default, as with NCCL's own transports; before, a rank more than 60 seconds
+  late to a collective failed the job. `NET_SIRCL_PEER_WAIT_TIMEOUT_MS` adds
+  an optional bound. A failed connection now shuts its socket down, so the
+  peer's requests on it fail promptly.
+  See [deadlines](docs/configuration.md#deadlines).
+- **Settings fail closed.** `NET_SIRCL_CHUNK`, `NET_SIRCL_SPEED_MBPS`,
+  `NET_SIRCL_TC`, `NET_SIRCL_RELAXED_ORDERING`, `NET_SIRCL_ROUTE_CHECK` and
+  `NET_SIRCL_GID_INDEX` are validated like the other settings: an empty,
+  malformed or out-of-range value fails initialization instead of selecting
+  the default or being truncated. `NET_SIRCL_OOB_ADDR` must be an IPv4 address
+  when set; when no address is found the plugin warns that it advertises
+  127.0.0.1.
+- **Topology files are read strictly, and identically by the plugin and
+  fabric-tool.** A `cabling` line is required; extra words, a `port0`/`port1`
+  line without exactly two names, over-long names, more than 64 hosts, a host
+  without a cable and cables that do not join every host are refused with a
+  message, where the plugin used to guess, truncate or continue without
+  routes. A two-host `cabling ring` is one cable for both tools (fabric-tool
+  used to read two); write a double-cabled pair with `cabling explicit`.
+- **Stray connections no longer fail communicator setup.** The listener binds
+  the advertised address and drops a connection that never sends valid
+  metadata.
+- **fabric-tool**
+  - Only processes run by root count as markers (`pgrep -U 0 -u 0`), so a
+    process that merely carries the marker's name cannot stand in for one.
+  - A missing tool or a failed read on a host is a problem that blocks
+    `apply`/`remove` and fails `verify`, instead of reading as "nothing
+    installed".
+  - The ownership record's layout name is derived from the topology's content,
+    not its file name, so a workstation and the boot unit agree. Each host
+    shows one pending record write the first time.
+  - `cabling explicit` in any order or port pairing can be planned.
+  - `apply --boot` no longer stops marker processes the plan does not name.
+  - `install-boot` starts the reconcile timer even when its immediate apply
+    fails; `remove-boot` can be run twice; ingress qdiscs added by a run that
+    failed later stay recorded as owned.
+  - `remove` refuses a host whose interfaces have other names unless `--facts`
+    is given, and a host whose record names a different marker executable
+    unless `--marker` names it. `verify --adopt` is rejected (it never did
+    anything).
+
+## Fixes without a change in normal use
+
+- Equally short lanes on an even ring cabled with `explicit` now follow the
+  cables at the higher position; they were assumed to arrive on port 1, which
+  put the two ends of a lane on different paths when a host was turned round.
+  Ring and path cabling are unaffected.
+- A direct peer capped with `NET_SIRCL_WINDOWS` above about 64 MiB could
+  overflow the queue pair's send queue on a large send; payload writes now
+  stop short of it and resume as completions arrive.
+- A forked child (a data-loader worker) no longer keeps the one-plugin-per-host
+  claim alive after its parent finalizes or exits.
+- A connect toward a position the topology gives no route to logs why.
+- The plugin build uses the bundled `transport-core` before a directory of
+  that name next to the checkout.
+- The release scanner fails on an empty or missing tree and scans files that
+  contain NUL bytes.
+
+## Tests added
+
+Peers that are late rather than lost, stray connections, a window deeper than
+the send queue, strict settings, fork handling, what the topology parser
+refuses and accepts, lane reciprocity on turned rings, a conformance corpus
+that both topology parsers must read alike, and 57 fabric-tool cases.
+
+## Not changed here
+
+- Version numbers, tags and the hardware-claim wording in README,
+  `docs/release-0.1.0.md`, `docs/measurements.md` and `docs/qualification.md`,
+  which disagree with each other in places and need the people who ran the
+  hardware to settle.
+- `transport-core/src/fabric.c` and the `sircl_protocol_*` declarations in
+  `sircl_fabric.h`, which nothing in this repository calls or defines.

@@ -20,7 +20,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1]
 STANDIN = HERE / "tests" / "standin"
-CORE = next(p for p in (HERE.parents[1] / "transport-core", HERE.parent / "transport-core") if (p / "VERSION").is_file())
+# The bundled core first, as net-sircl/Makefile chooses it.
+CORE = next(p for p in (HERE.parent / "transport-core", HERE.parents[1] / "transport-core") if (p / "VERSION").is_file())
 CORE_SOURCES = [str(CORE / "src" / f) for f in ("core.c", "topology.c", "sysfs.c")]
 CORE_SOURCES += [str(HERE / "net_sircl_plan.c")]
 FLAGS = ["-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread"]
@@ -67,7 +68,8 @@ class NetSirclTests(unittest.TestCase):
                         str(HERE / "tests/failure_test.c"), str(STANDIN / "shm_verbs.c"),
                         *CORE_SOURCES, "-Wl,--wrap=sccl_emu_ibv_post_send", "-o", str(exe)], check=True)
         for peer in (1, 3):
-            for mode in ("send", "recv", "flight", "lost"):
+            # The patient modes show that a peer which is merely late is waited for, as NCCL does.
+            for mode in ("send", "recv", "flight", "lost", "patient-send", "patient-recv"):
                 with self.subTest(peer=peer, mode=mode):
                     fabric = f"/sircl-failure-{os.getpid()}-{peer}-{mode}"
                     env = {k: v for k, v in os.environ.items() if not k.startswith("NET_SIRCL_")}
@@ -284,6 +286,15 @@ class NetSirclTests(unittest.TestCase):
     def test_connect_gives_up_at_its_deadline(self):
         self.assertIn("connect failed after", self.run_layer("timeout"))
 
+    def test_stray_connections_do_not_fail_the_listener(self):
+        self.assertIn("3 stray connections dropped", self.run_layer("stray"))
+
+    def test_direct_window_deeper_than_the_send_queue(self):
+        out = self.run_layer("deepwindow")
+        self.assertIn("8 MiB in 2048 chunks exact", out)
+        in_flight = int(out.split("at most ")[1].split(" chunks")[0])
+        self.assertLess(in_flight, 1024)
+
     # -- topology files --
     def routes(self, text, position):
         with tempfile.NamedTemporaryFile("w", suffix=".topo", delete=False) as f:
@@ -333,6 +344,24 @@ class NetSirclTests(unittest.TestCase):
         self.assertIn("unknown key", self.routes("hosts a b\nflavour x\n", 0))
         self.assertIn("a cable is", self.routes("hosts a b\ncabling explicit\ncable 0.port2 1.port0\n", 0))
         self.assertIn("fewer than two hosts", self.routes("hosts a\n", 0))
+        # A file without `cabling` used to parse into a topology with no cables and no routes.
+        self.assertIn("cabling is ring, path or explicit", self.routes("hosts a b\n", 0))
+        self.assertIn("without a cable", self.routes("hosts a b c\ncabling explicit\ncable 0.port0 1.port1\n", 0))
+
+    def test_equally_short_lanes_follow_the_cables_on_a_turned_ring(self):
+        # A ring of four with hosts 2 and 3 turned around: 0.port0-1.port1, 1.port0-2.port0, 2.port1-3.port1,
+        # 3.port0-0.port1. Path A from 0 (out of its port 0) reaches 2 on port 0, so lane 0 leaves 2 by port 0
+        # and lane 1 by port 1; assuming ring cabling would put them the other way round, on the wrong paths.
+        # Path A from 1 reaches 3 on port 1, as in ring cabling.
+        turned = ("hosts a b c d\ncabling explicit\ncable 0.port0 1.port1\ncable 1.port0 2.port0\n"
+                  "cable 2.port1 3.port1\ncable 3.port0 0.port1\n")
+        self.assertEqual(self.routes(turned, 0)["2"].split(":")[0], "rocep1s0f0/roceP2p1s0f1")
+        self.assertEqual(self.routes(turned, 2)["0"].split(":")[0], "rocep1s0f0/roceP2p1s0f1")
+        self.assertEqual(self.routes(turned, 1)["3"].split(":")[0], "rocep1s0f0/roceP2p1s0f1")
+        self.assertEqual(self.routes(turned, 3)["1"].split(":")[0], "rocep1s0f1/roceP2p1s0f0")
+        # Ordinary ring cabling is unchanged: the higher position sends lane 0 out of port 1.
+        self.assertEqual(self.routes("hosts a b c d\ncabling ring\n", 3)["1"].split(":")[0],
+                         "rocep1s0f1/roceP2p1s0f0")
 
     def test_source_shares_bound_all_path_and_ring_layouts(self):
         for n in (16, 64):  # Larger route sets retain the aggregate fallback.
@@ -439,11 +468,13 @@ class NetSirclTests(unittest.TestCase):
                             for prev, relay, nxt in zip(p, p[1:], p[2:]):
                                 q = (relay, adj[relay][nxt], f % 2)
                                 queues.setdefault(q, {}).setdefault((s, f), set()).add(d)
+                # Both ends of every lane are on one path, including equally short directions on a ring whose
+                # hosts are cabled port 0 to port 0 (the higher position follows the cables, not port 1).
+                self.assertTrue(reverse_ok, (n, layout))
                 for budget in (65536, 262144, 327680):
                     caps = (ctypes.c_uint32 * (n * 4))()
                     derived = lib.test_route_caps(os.fsencode(path), budget, caps)
-                    self.assertEqual(derived, int(reverse_ok), (n, layout))
-                    # Non-reciprocal tie routes deliberately keep the aggregate fallback.
+                    self.assertEqual(derived, 1, (n, layout))
                     if not derived:
                         self.assertEqual(set(caps), {budget // max(1, n - 2) // 64 * 64})
                         continue

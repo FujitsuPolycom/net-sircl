@@ -16,8 +16,8 @@ Ownership marks, by which ``remove`` deletes exactly the tool's objects:
 - relay filters occupy the reserved preferences 11 to 17 of chain 0 on the
   ingress of the four fabric network devices (preference ``10 + k``, handle
   ``k``, protocol ``TAG(k)``);
-- marker processes run the marker executable, whose first 15 characters are
-  the process name ``pgrep -x`` matches;
+- marker processes run the marker executable as root (real and effective
+  user), and its first 15 characters are the process name ``pgrep -x`` matches;
 - the record ``/run/fabric-table/relay-state.json`` names the host's group,
   layout, relay egress, plan digest and the ingress qdiscs the tool added.
   ``/run`` is cleared at boot, like every object of the plan.
@@ -74,6 +74,11 @@ SECTION = "@@"
 # Ends every section of a read script with a newline, so the next ``@@`` header starts its own
 # line even after output without one (``head -c 64`` of the digest record prints none).
 SECTION_END = "echo"
+# Tools the read script needs on the read account's PATH. One that is missing is reported in the
+# ``tools`` section, so its empty output is never taken for "nothing there".
+READ_TOOLS = ("ip", "tc", "pgrep", "sha256sum", "stat", "head")
+# ``@@exit:<section>`` holds the exit status of the read command of ``<section>``.
+STATUS_PREFIX = "exit:"
 HEADER = "set -euo pipefail"
 SETTLE = "sleep 1.5"
 _PATH = re.compile(r"^/[A-Za-z0-9_./+-]+$")
@@ -94,7 +99,7 @@ class MarkerConfig:
 
     def __post_init__(self) -> None:
         for label, value in (("marker path", self.path), ("marker log directory", self.log_dir)):
-            if not _PATH.match(value) or "/../" in f"{value}/":
+            if not _PATH.fullmatch(value) or "/../" in f"{value}/":
                 raise FabricError(f"{label} {value!r} must be an absolute path of letters, digits and _./+-")
         # Root runs the executable and opens the logs, so neither may live where every user can write.
         for label, value, default in (("marker path", self.path, DEFAULT_MARKER),
@@ -165,7 +170,7 @@ def _ipv4(value: str) -> str:
 
 
 def _mac(value: str) -> str:
-    if not _MAC.match(value.lower()):
+    if not _MAC.fullmatch(value.lower()):
         raise FabricError(f"{value!r} is not a MAC address; apply needs the hosts' facts, not placeholders")
     return value.lower()
 
@@ -186,25 +191,41 @@ def _device(value: str, *, bindings: model.FabricBindings = model.DEFAULT_BINDIN
 
 
 def read_script(marker: MarkerConfig, *, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
-    """Read-only facts and relay objects of one host, as ``@@<section>`` blocks."""
+    """Read-only facts and relay objects of one host, as ``@@<section>`` blocks.
+
+    A read that fails must not look like a host that holds nothing. The
+    ``tools`` section names every tool of :data:`READ_TOOLS` that the read
+    account cannot run, and the reads of addresses, routes, neighbours, qdiscs,
+    filters and marker processes are each followed by an ``@@exit:<section>``
+    block with the command's exit status (:func:`.state.parse` decides which
+    statuses are failures). Only processes whose real and effective user are
+    root count as markers: no other user can start one, so a process that
+    merely carries the marker's name and arguments is not listed.
+    """
     lines = ["set -u"]
 
-    def section(name: str, *commands: str) -> None:
+    def section(name: str, *commands: str, status: bool = False) -> None:
         lines.append(f"echo {q(SECTION + name)}")
         lines.extend(commands)
+        if status:
+            lines.append("status=$?")
         lines.append(SECTION_END)
+        if status:
+            lines.extend([f"echo {q(SECTION + STATUS_PREFIX + name)}", 'echo "$status"', SECTION_END])
 
     section("hostname", "hostname")
+    section("tools", f"for tool in {' '.join(READ_TOOLS)}; do command -v \"$tool\" >/dev/null 2>&1 || "
+                     "echo \"$tool\"; done")
     section("versions", "ip -V 2>&1 || true", "tc -V 2>&1 || true")
-    section("links", "ip -j addr show")
+    section("links", "ip -j addr show", status=True)
     for device in bindings.devices:
         section(f"rdma:{device}", f"ls /sys/class/infiniband/{q(device)}/device/net 2>/dev/null || true")
-    section("routes", "ip -j -d route show table main")
-    section("neighbours", "ip -j neigh show nud permanent")
+    section("routes", "ip -j -d route show table main", status=True)
+    section("neighbours", "ip -j neigh show nud permanent", status=True)
     for netdev in bindings.netdevs:
-        section(f"qdisc:{netdev}", f"tc -j qdisc show dev {q(netdev)} 2>/dev/null || true")
-        section(f"filters:{netdev}", f"tc -j filter show dev {netdev} ingress 2>/dev/null || true")
-    section("markers", f"pgrep -a -x {q(marker.comm)} || true")
+        section(f"qdisc:{netdev}", f"tc -j qdisc show dev {q(netdev)} 2>/dev/null", status=True)
+        section(f"filters:{netdev}", f"tc -j filter show dev {q(netdev)} ingress 2>/dev/null", status=True)
+    section("markers", f"pgrep -a -x -U 0 -u 0 {q(marker.comm)}", status=True)
     section("marker-binary", f"sha256sum {q(marker.path)} 2>/dev/null || true")
     section("marker-record", f"head -c 64 {q(marker.record)} 2>/dev/null || true")
     section("marker-owners", f"stat -c '%U %a %n' -- {' '.join(q(p) for p in marker.checked_paths)} "
@@ -236,7 +257,7 @@ def route_get_script(destinations: Iterable[str]) -> str:
 
 def guard(hostname: str) -> str:
     """Stop the script unless it runs on ``hostname``."""
-    if not _HOSTNAME.match(hostname):
+    if not _HOSTNAME.fullmatch(hostname):
         raise FabricError(f"host name {hostname!r} cannot be checked safely")
     return (f'test "$(hostname)" = {q(hostname)} || '
             f'{{ echo {q("refusing: this host is not " + hostname)} >&2; exit 3; }}')
@@ -280,9 +301,14 @@ def route_replace(destination: str, netdev: str, source: str, *, bindings: model
             f"scope link proto {ROUTE_PROTOCOL}")
 
 
-def route_del(destination: str, netdev: str, *, protocol: int | None, metric: int = 0, bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
-    """Delete one /32 route; naming its protocol makes the kernel refuse any other route."""
-    command = f"sudo -n ip route del {_ipv4(destination)}/32 dev {_netdev(netdev, bindings=bindings)}"
+def route_del(destination: str, netdev: str, *, protocol: int | None, metric: int = 0, prefixlen: int = 32,
+              bindings: model.FabricBindings = model.DEFAULT_BINDINGS) -> str:
+    """Delete one route (a /32 unless ``prefixlen`` says otherwise); naming its protocol makes the kernel
+    refuse any other route."""
+    length = int(prefixlen)
+    if not 0 <= length <= 32:
+        raise FabricError(f"{length} is not an IPv4 prefix length")
+    command = f"sudo -n ip route del {_ipv4(destination)}/{length} dev {_netdev(netdev, bindings=bindings)}"
     if protocol is not None:
         command += f" proto {int(protocol)}"
     if metric:

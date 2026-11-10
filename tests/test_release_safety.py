@@ -29,6 +29,23 @@ class ExtractedSourceTests(unittest.TestCase):
             (path / "guide.txt").write_text("Example address: 192.0.2.1")
             self.assertEqual(self.scan(path).returncode, 0)
 
+    def test_an_empty_or_missing_tree_is_not_a_clean_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self.scan(directory).returncode, 2)
+            result = self.scan(Path(directory) / "absent")
+            self.assertEqual(result.returncode, 2)
+            self.assertNotIn("findings: 0", result.stdout)
+
+    def test_a_nul_byte_does_not_hide_private_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            private = "spark-" + "abcd"
+            (path / "blob.bin").write_bytes(b"\x89PNG\0\0" + private.encode() + b"\0tail")
+            result = self.scan(path)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('"rule": "site-host"', result.stdout)
+            self.assertNotIn(private, result.stdout)
+
     def test_symlinks_are_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)

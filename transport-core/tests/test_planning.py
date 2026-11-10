@@ -74,6 +74,66 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(self.lib.sircl_core_topology_parse(str(path).encode(), out, error, len(error)), -1)
             self.assertIn(expected, error.value)
 
+    def parse(self, text):
+        path = self.root / "case.topology"
+        path.write_bytes(text.encode())
+        out = ctypes.create_string_buffer(16384)
+        error = ctypes.create_string_buffer(256)
+        rc = self.lib.sircl_core_topology_parse(str(path).encode(), out, error, len(error))
+        return rc, error.value.decode()
+
+    def test_topology_refuses_what_it_would_have_guessed(self):
+        long_name = "h" * 64
+        many = " ".join(f"h{i}" for i in range(65))
+        for text, expected in (
+                ("hosts a b\n", "cabling is ring, path or explicit"),              # no cabling: no cables, no routes
+                ("hosts a b\ncabling mesh\n", "cabling is ring, path or explicit"),
+                ("hosts a b\ncabling ring path\n", "cabling takes one of"),
+                ("hosts a b\ncabling explicit\n", "without a cable"),
+                ("hosts a b c\ncabling explicit\ncable 0.port0 1.port1\n", "leave host 2 (c) without a cable"),
+                ("hosts a b c d\ncabling explicit\ncable 0.port0 1.port1\ncable 2.port0 3.port1\n",
+                 "do not join the hosts into one path or cycle"),
+                ("hosts a b\ncabling explicit\ncable 0.port0 1.port1x\n", "a cable is"),   # trailing text
+                ("hosts a b\ncabling explicit\ncable -0.port0 1.port1\n", "a cable is"),   # a sign
+                ("hosts a b\ncabling explicit\ncable 0.port0 1.port1 2.port0\n", "a cable is"),
+                ("hosts a b\ncabling explicit\ncable 0.port0 7.port1\n", "outside 0-1"),
+                ("hosts a b\ncabling path\nport0 only_one\n", "requires exactly two"),
+                ("hosts a b\ncabling path\nport1 a b c\n", "requires exactly two"),
+                ("hosts a b\ncabling path\nport0 ok bad/name\n", "invalid device identifier"),
+                ("hosts a b\ncabling path\nport0 ok " + "f" * 64 + "\n", "invalid device identifier"),
+                (f"hosts a {long_name}\ncabling path\n", "longer than 63 characters"),   # was silently cut short
+                (f"hosts {many}\ncabling path\n", "more than 64 hosts"),                 # was silently dropped
+                ("hosts a b\ncabling path\nrelay_budget 65536 extra\n", "positive byte count"),
+                ("hosts a b\ncabling path\nrelay_budget -65536\n", "positive byte count"),
+                ("hosts a b\ncabling path\nrelay_budget 0x10000\n", "positive byte count"),
+                ("hosts a b\ncabling path\nrelay_budget 99999999999\n", "positive byte count"),
+                ("hosts a b\ncabling path\nnet-sircl-topology 2\n", "unknown words"),
+                ("hosts a b\ncabling path\n# " + "x" * 1100 + "\n", "longer than 1022 characters")):
+            with self.subTest(text=text[:60]):
+                rc, error = self.parse(text)
+                self.assertEqual(rc, -1, text[:80])
+                self.assertIn(expected, error)
+
+    def test_topology_accepts_the_documented_forms(self):
+        sixty_three = "h" * 63
+        many = " ".join(f"h{i}" for i in range(64))
+        for text in (
+                "hosts a b\ncabling path\n",
+                "hosts a b\ncabling ring\n",                                # a pair: one cable, as path
+                "# comment\nnet-sircl-topology\nhosts a b c  # trailing comment\n\tcabling\tring\r\n",
+                "hosts a b\nhosts c d\ncabling path\nrelay_budget 196608\n",   # hosts lines append
+                "hosts a b\ncabling explicit\ncable 0.port0 1.port1\ncable 1.port0 0.port1\n",   # two cables
+                "hosts a b c\ncabling explicit\ncable 2.port0 0.port1\ncable 1.port1 0.port0\n",
+                "hosts a b\ncabling path\nport0 emu0 emu1\nport1 emu0 emu1\n",   # aliased names: emulation
+                "hosts a b\ncabling path\nport0 mlx5_0 mlx5-1.a:b\nport1 _x y\n",
+                f"hosts a {sixty_three}\ncabling path\n",
+                f"hosts {many}\ncabling ring\n",
+                "hosts a b\ncabling path\n# " + "x" * 1019,                    # a full last line without a line end
+        ):
+            with self.subTest(text=text[:60]):
+                rc, error = self.parse(text)
+                self.assertEqual(rc, 0, error)
+
 
 if __name__ == "__main__":
     unittest.main()

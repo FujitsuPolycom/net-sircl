@@ -5,6 +5,10 @@ relays. A ring needs them when communicating peers are not direct neighbours.
 A path needs them because NCCL's ring algorithm connects the two end hosts,
 which share no cable. A *layout* is the cabling and ordered hosts; a *group*
 in the tool's output is the set of hosts described by one topology file.
+With two hosts, `cabling ring` and `cabling path` both mean the one cable
+`0.port0-1.port1`; write a pair joined by two cables with `cabling explicit`
+and two `cable` lines. `cabling explicit` may join the hosts in any order and
+through either port, as long as the cables form one path or one cycle.
 
 ## How relays work
 
@@ -71,7 +75,10 @@ An executing apply rereads and verifies changed hosts. Always run `verify`
 afterward, even if apply reports nothing to change. Identity mismatches,
 contradictory facts, cabling mismatches and foreign ownership block changes.
 A failure during execution can leave partial state: inspect `status` and
-resolve the cause before using the relays. Read sections end with a newline
+resolve the cause before using the relays. A host whose read failed (a tool
+missing from the SSH account's `PATH`, or a failed `ip`, `tc` or `pgrep` read)
+is a blocker for `apply` and `remove` and fails `verify`; it is never treated
+as a host that holds nothing. Read sections end with a newline
 so digest records cannot hide following ownership observations. Marker starts
 use util-linux `setsid -f` with stdin from `/dev/null` and stdout and stderr on
 the root-created log, allowing the SSH command to finish while markers run.
@@ -104,9 +111,12 @@ See [marker security](../fabric-tool/README.md#marker-security) for custom paths
 and refusal handling.
 
 fabric-tool marks installed IP routes and neighbour entries with protocol 82,
-and forwarding filters with `tc` ingress preferences 11Ã¢â‚¬â€œ17. Its ownership
+and forwarding filters with `tc` ingress preferences 11–17. Its ownership
 record is `/run/fabric-table/relay-state.json`. `remove` targets marked objects,
-owned ingress qdiscs, marker processes and that record.
+owned ingress qdiscs, marker processes and that record. Only root's processes
+count as markers. Pass `remove` the `--marker` and, where the hosts do not use
+the default interface names, the `--facts` that `apply` was given: it refuses
+a host whose record or interfaces say otherwise.
 
 It refuses hosts with `/run/sparkring-fabric/relay-state.json`, written by the
 SparkRing project's relay installer. Remove those relays with that installer's
@@ -131,12 +141,13 @@ sudo /opt/net-sircl/bin/fabric-tool install-boot \
 This writes topology and facts under `/etc/fabric-table/`, copies the tool to
 `/usr/local/lib/fabric-tool` and `/usr/local/bin/fabric-tool` (separate from the
 `/opt/net-sircl` install), enables `fabric-table.service` and applies the relays.
-It also installs and starts `fabric-table-reconcile.timer`. Every 15 seconds
+It also installs and starts `fabric-table-reconcile.timer`; the timer is
+started even when the immediate apply fails, and the command says so. Every 15 seconds
 after the preceding check finishes, the timer starts
 `fabric-table-reconcile.service`, which requests a reload of the retained
 fabric service, or starts it if inactive. Startup and reload both run
-`apply --boot --execute`, adding missing objects and markers without removing
-healthy state. Reload preserves existing marker processes. Failed checks are
+`apply --boot --execute`, adding missing objects and markers, replacing planned
+ones that differ and removing nothing the plan does not name. Reload preserves existing marker processes. Failed checks are
 retried; inspect both services' journals when restoration is blocked.
 Addresses must be ready at `network-online.target`. If a separate service
 configures them later, order `fabric-table.service` after that service and
