@@ -29,7 +29,7 @@ jobs:
       - name: Build and test extracted source archive
         run: |
           mkdir "$RUNNER_TEMP/net-sircl-source"
-          tar -xzf dist/net-sircl-0.1.2.tar.gz -C "$RUNNER_TEMP/net-sircl-source"
+          tar -xzf dist/net-sircl-0.1.3.tar.gz -C "$RUNNER_TEMP/net-sircl-source"
           python3 scripts/check_release_safety.py --tree "$RUNNER_TEMP/net-sircl-source"
           make -C "$RUNNER_TEMP/net-sircl-source" -j2 all emu
           make -C "$RUNNER_TEMP/net-sircl-source" check

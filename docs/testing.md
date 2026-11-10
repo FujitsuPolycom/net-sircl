@@ -112,7 +112,7 @@ python3 scripts/check_release_safety.py .
 python3 scripts/check_release_safety.py --tree EXTRACTED_DIRECTORY
 ```
 
-The archive is `dist/net-sircl-0.1.2.tar.gz`, built from `git ls-files` in
+The archive is `dist/net-sircl-0.1.3.tar.gz`, built from `git ls-files` in
 this repository, using current tracked-file bytes and fixed timestamps,
 ownership and modes. Stage added or deleted files before packaging; a release
 should be built from a clean commit. Untracked files cannot ship. A tracked
@@ -132,7 +132,7 @@ extracted archive before building it, using the same rules.
 
 ## Source identity
 
-The startup line `net-sircl transport-core 0.1.1 ABI 1 source <sha256>` contains
+The startup line `net-sircl transport-core 0.1.2 ABI 1 source <sha256>` contains
 a digest of transport-core's C sources, headers, Python tools and VERSION.
 It is not a compiled-library checksum. Removing Python adaptation tools and
 changing packaging or the component version changes this digest.

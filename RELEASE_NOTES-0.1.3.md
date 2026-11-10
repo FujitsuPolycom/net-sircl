@@ -1,12 +1,31 @@
-# net-sircl: changes after 0.1.2 (unreleased)
+# net-sircl 0.1.3
 
-Status: **CPU-tested only.** Nothing here has run on DGX Sparks. The plugin,
-transport-core and fabric-tool sources on this branch differ from the `v0.1.2`
-tag (they already did after the merge of the resource-ownership work), so the
-0.1.2 hardware qualification does not cover this tree; see
-[qualification](docs/qualification.md). The `VERSION` files still read 0.1.2
-and 0.1.1 until a release is cut. Wire version remains **6** and the wire
-structures are unchanged; every host of a job must run the same build.
+Status: **research-only; this release is CPU-tested only.** The 0.1.3 plugin,
+transport-core and fabric-tool have not run on DGX Sparks as released. Plugin
+and fabric-tool versions are 0.1.3; bundled transport-core is 0.1.2, ABI 1,
+with a new source identity. The network library exports ext-net v7–v12 and
+tuner v4. Wire version remains **6** and the wire structures are unchanged;
+every host of a job must run the same build.
+
+0.1.3 contains everything merged after the `v0.1.2` tag, in two steps:
+
+1. **Resource ownership and recovery** (merged 2026-10 as #3): fabric-tool
+   keeps resolved interface bindings and resource ownership across planning,
+   apply, restoration and removal, and a local timer restores missing relay
+   state after carrier resets; the transport uses a shared validated admission
+   plan with explicit registration and request lifetimes; CPU-staged emulation
+   selects LL/Simple and rejects unsafe LL128 requests. Revisions of this work
+   ran on hardware, and they are tagged: `validation/2026-10-23-transport`,
+   `validation/2026-10-23-resource-ownership`, `validation/2026-10-23-recovery`
+   and `validation/2026-10-23-installer-coordination` (the last is later than
+   the revision that ran). Their records are the
+   [transport validation](docs/dgx-spark-validation.md), the
+   [recovery validation](docs/recovery-validation.md) and the
+   [qualification table](docs/qualification.md).
+2. **Review fixes** (merged as #4), described below. None of them has run on
+   hardware, and they change the plugin's data path (deadlines, connection
+   setup), the topology parser and fabric-tool's reads and ownership record.
+   The hardware records of step 1 therefore do not cover 0.1.3.
 
 ## Behaviour that changes for users
 
@@ -79,11 +98,37 @@ the send queue, strict settings, fork handling, what the topology parser
 refuses and accepts, lane reciprocity on turned rings, a conformance corpus
 that both topology parsers must read alike, and 57 fabric-tool cases.
 
-## Not changed here
+## Local validation
 
-- Version numbers, tags and the hardware-claim wording in README,
-  `docs/release-0.1.0.md`, `docs/measurements.md` and `docs/qualification.md`,
-  which disagree with each other in places and need the people who ran the
-  hardware to settle.
+On x86-64 Linux (Ubuntu 24.04, GCC 13.3): transport-core's three C tests and
+seven Python tests, the plugin's 29 CPU tests (one skipped without rdma-core
+headers), the 20 release and conformance tests and fabric-tool's 203 tests
+pass, and the release scanner reports no findings. CI builds the real-NIC
+library and repeats the suites on x86-64 and aarch64.
+
+## Before using 0.1.3 on hardware
+
+Run the [hardware procedure](fabric-tool/HARDWARE-TEST-PLAN.md) and the
+nccl-tests and PyTorch checks of the earlier records on the build you deploy,
+and record the result as the [qualification table](docs/qualification.md)
+requires. The changes most worth exercising are the deadline behaviour with a
+deliberately late rank, relayed traffic after fabric-tool's stricter reads,
+and one `apply` on hosts that carry a record written by 0.1.2.
+
+## Documentation corrections
+
+- The README said restoring relay tables at boot was not yet qualified. It was
+  checked once on hardware with an earlier fabric-tool revision; the README now
+  points to that record and its limits.
+- The README, the 0.1.0 measurements and the ring-of-four example said a ring
+  of four was CPU-tested only. It ran nccl-tests with the 0.1.0 transport, as
+  the 0.1.0 notes state, and has not been rerun since.
+- The 0.1.0 notes and the 0.1.0 measurements disagree on whether relaxed
+  ordering disabled was measured and on which installer configured the
+  path-of-four relays. No retained record settles either, and both documents
+  now say so.
+
+## Not changed
+
 - `transport-core/src/fabric.c` and the `sircl_protocol_*` declarations in
   `sircl_fabric.h`, which nothing in this repository calls or defines.

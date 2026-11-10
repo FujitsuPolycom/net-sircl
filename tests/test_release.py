@@ -44,7 +44,8 @@ class ReleaseTests(unittest.TestCase):
                 for required in ("README.md", "LICENSE", "NOTICE", "Makefile", "SOURCE.json",
                                  "examples/pair.topology", ".github/workflows/ci.yml",
                                  "net-sircl/nccl/LICENSE.txt", "docs/transport-core.md",
-                                 "RELEASE_NOTES-0.1.1.md", "RELEASE_NOTES-0.1.2.md", "net-sircl/ROUTE-ALLOWANCE.md",
+                                 "RELEASE_NOTES-0.1.1.md", "RELEASE_NOTES-0.1.2.md", "RELEASE_NOTES-0.1.3.md",
+                                 "net-sircl/ROUTE-ALLOWANCE.md",
                                  "net-sircl/net_sircl_tuner.h", "net-sircl/nccl/tuner_v4.h",
                                  "examples/torch_teardown.py", "scripts/check_teardown.py",
                                  "scripts/check_channels.py", "scripts/check_compat.py",
@@ -61,6 +62,26 @@ class ReleaseTests(unittest.TestCase):
                     self.assertFalse(set(Path(member.name).parts) & {".git", "build", ".core-build", "dist", "test-results"})
                     self.assertEqual(archive.extractfile(member).read(), (ROOT / member.name).read_bytes())
                     self.assertEqual(member.mtime, 0)
+
+    def test_version_strings_agree(self):
+        # One version per component, stated in several places: none may drift from its VERSION file.
+        plugin = (ROOT / "net-sircl/VERSION").read_text().strip()
+        core = (ROOT / "transport-core/VERSION").read_text().strip()
+        fabric = (ROOT / "fabric-tool/VERSION").read_text().strip()
+        manifest = json.loads((ROOT / "SOURCE.json").read_text())
+        self.assertEqual(manifest["plugin_version"], plugin)
+        self.assertEqual(manifest["core_version"], core)
+        self.assertEqual(manifest["fabric_tool"]["version"], fabric)
+        header = (ROOT / "transport-core/include/sircl_core/core.h").read_text()
+        self.assertIn(f'#define SIRCL_CORE_VERSION "{core}"', header)
+        self.assertIn(f"#define SIRCL_CORE_ABI {manifest['core_abi']}u", header)
+        self.assertIn(f"#define NET_SIRCL_VERSION {manifest['plugin_wire_version']} ",
+                      (ROOT / "net-sircl/net_sircl.h").read_text())
+        self.assertIn(f"Version **{plugin}**", (ROOT / "README.md").read_text())
+        self.assertIn(f"Version **{fabric}**", (ROOT / "fabric-tool/README.md").read_text())
+        self.assertIn(f"Version {core}, ABI", (ROOT / "transport-core/README.md").read_text())
+        self.assertTrue((ROOT / f"RELEASE_NOTES-{plugin}.md").is_file())
+        self.assertIn(f"dist/net-sircl-{plugin}.tar.gz", (ROOT / ".github/workflows/ci.yml").read_text())
 
     def test_release_identity_is_built_in(self):
         subprocess.run(["make", "-C", str(ROOT / "net-sircl"), "emu"], check=True)

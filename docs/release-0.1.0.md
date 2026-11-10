@@ -50,6 +50,14 @@ NCCL alone timed out, and a PyTorch DDP check passed on all four ranks.
 `NET_SIRCL_RELAXED_ORDERING=0` against `=1` measured no difference on a pair
 (ratios 0.98-1.02).
 
+Later review found two of these statements recorded inconsistently, with no
+retained record to settle them: [measurements](measurements.md) keeps no
+conditions or values for the relaxed-ordering comparison, and it says the
+path-of-four relays were configured with a SparkRing installer rather than
+fabric-tool's path table. Treat relaxed ordering disabled as unmeasured and the
+path result as not qualifying fabric-tool. The ring-of-four result stands; it
+has not been rerun with a later build.
+
 Known issue: on one cabled pair, one run in four of the all-gather line under
 CUDA-graph capture stopped with `transport retry counter exceeded` on one PCI
 function; three further runs passed. The cause is not yet established.

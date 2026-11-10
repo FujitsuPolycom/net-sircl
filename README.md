@@ -8,8 +8,11 @@ environment variables. PyTorch, vLLM, JAX and other NCCL applications then use
 it with no code changes, and NCCL keeps its own collective algorithms and
 CUDA-graph support.
 
-Version **0.1.2**, wire version **6** (every host in a job must use the same
-wire version). Status: **research-only**. The [qualification table](docs/qualification.md)
+Version **0.1.3**, wire version **6** (every host in a job must use the same
+wire version and the same build). Status: **research-only**. 0.1.3 is
+CPU-tested only: it has not run on DGX Sparks, and the recorded results below
+were obtained with earlier builds ([release notes](RELEASE_NOTES-0.1.3.md)).
+The [qualification table](docs/qualification.md)
 identifies the exact source revisions and conditions of recorded DGX Spark
 results; modified source builds require separate hardware qualification.
 
@@ -78,7 +81,7 @@ torchrun --nnodes=2 --nproc-per-node=1 --node-rank=RANK \
 ```
 
 Expect `Loaded net plugin sircl (v12)`, `Using network sircl`,
-`net-sircl 0.1.2 (wire version 6)`, and `PASS` from every rank.
+`net-sircl 0.1.3 (wire version 6)`, and `PASS` from every rank.
 `NCCL_SOCKET_IFNAME` takes one interface name or prefix; for NCCL's `^`, `=`
 or list forms, set `NET_SIRCL_OOB_ADDR` to this host's IPv4 address instead.
 
@@ -96,9 +99,13 @@ or list forms, set `NET_SIRCL_OOB_ADDR` to this host's IPv4 address instead.
 3. Launch as in the quickstart with `NCCL_ALGO=Ring`, one rank per host in cable
    order, and `--nnodes`/`--node-rank` adjusted.
 
-Relay tables are verified read-only by fabric-tool; restoring them at boot is
-not yet qualified. A ring of four is CPU-tested only, and layouts not listed in
-[Verified with](#verified-with) are untested on hardware. See
+Relay tables are verified read-only by fabric-tool. Restoring them at boot and
+after a link reset was checked on hardware once, on a four-host path with an
+earlier fabric-tool revision; the [qualification table](docs/qualification.md)
+gives the conditions, and nothing wider is qualified. A ring of four ran
+nccl-tests with the 0.1.0 transport ([0.1.0 notes](docs/release-0.1.0.md)) and
+has not been rerun since; later builds cover it on CPU only. Layouts not listed
+in [Verified with](#verified-with) are otherwise untested on hardware. See
 [configuration](docs/configuration.md).
 
 ## Verified with
@@ -106,10 +113,10 @@ not yet qualified. A ring of four is CPU-tested only, and layouts not listed in
 Single runs on one eight-Spark ring (GB10, ConnectX-7 RoCE at 200 Gb/s, one
 GPU and rank per host, `NCCL_MAX_NCHANNELS=8`). A pass means correct results,
 unchanged RDMA/Ethernet error counters and every rank exiting on its own; it is
-not a throughput benchmark or a serving qualification. Rows other than
-nccl-tests and PyTorch eager/graph used the 0.1.1 library, which shares wire
-version 6 and transport-core 0.1.1 with this release. Every row is
-**research-only**.
+not a throughput benchmark or a serving qualification. The nccl-tests and
+PyTorch eager/graph rows used the 0.1.2 library and the other rows the 0.1.1
+library. Both share wire version 6 with this release, but none of the rows ran
+0.1.3. Every row is **research-only**.
 
 | Framework | Version | NCCL | Sparks |
 |---|---|---|---|
