@@ -4,7 +4,7 @@ fabric-tool configures relays between directly cabled DGX Sparks: NIC
 forwarding rules on intermediate hosts, sender IP routes and neighbour entries,
 and a per-NIC marker process that tags outgoing RDMA packets with the number
 of relays to cross. It reads net-sircl's topology file.
-Version **0.1.2**, Apache-2.0; derived from the SparkRing project, see
+Version **0.1.3**, Apache-2.0; derived from the SparkRing project, see
 [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 Status: research-only. The tool implements relay planning, ownership checks,

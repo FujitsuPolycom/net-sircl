@@ -1,10 +1,10 @@
 {
   "core_abi": 1,
-  "core_version": "0.1.1",
-  "plugin_version": "0.1.2",
+  "core_version": "0.1.2",
+  "plugin_version": "0.1.3",
   "plugin_wire_version": 6,
   "fabric_tool": {
-    "version": "0.1.2",
+    "version": "0.1.3",
     "upstream_file_sha256": {
       "DESIGN.md": "ba6d0fb875e8758aceaec71fc80716a3a6dabec7dca47bf6ab51f79aba80bc72",
       "HARDWARE-TEST-PLAN.md": "ef4a8a26193cfc81913d6b253136c9ca66c3dd8f873a55601ef429c32c0918d9",
@@ -49,7 +49,8 @@
       "CPU tests run without external project imports; external comparison and network-simulator tests are omitted.",
       "Documentation describes standalone usage and validation boundaries.",
       "Marker security regressions run standalone with synthetic host state and local shell checks.",
-      "0.1.2 verify rejects missing hardware offload and ownership blockers; CPU loss/recovery fixtures added."
+      "0.1.2 verify rejects missing hardware offload and ownership blockers; CPU loss/recovery fixtures added.",
+      "0.1.3 counts only root processes as markers, treats failed reads as blockers, names the layout by content and plans explicit cabling; CPU-tested only."
     ]
   },
   "archive_tool": "transport-core/tools/package.py",
@@ -113,9 +114,10 @@
     "Standalone build, CI, archive tooling, documentation and synthetic examples retained from public v0.1.0.",
     "External SIRCL/libsircl comparison tests and proxy-adaptation tools remain excluded.",
     "0.1.2 adds the tuner v4 policy, finite request deadlines and sticky transport errors; wire remains 6.",
-    "Transport-core exposes version 0.1.1 ABI 1; its startup source identity is derived from the distributed implementation bytes.",
+    "Transport-core exposes version 0.1.2 ABI 1; its startup source identity is derived from the distributed implementation bytes.",
     "Fabric-tool 0.1.2 requires hardware-offloaded relay rules and returns failure for verify blockers.",
-    "Corrected PyTorch graph lifetime check, channel and runtime matrices, fault-injection tests and public documentation."
+    "Corrected PyTorch graph lifetime check, channel and runtime matrices, fault-injection tests and public documentation.",
+    "0.1.3 separates transport deadlines from waits for the peer application, validates every setting, parses topology files strictly and shares that grammar with fabric-tool; wire remains 6; CPU-tested only."
   ],
   "source_sha256": {
     "fabric-tool/mesh_marker.c": "5f330fba6e4c6c2e49d158b84fd76ef0c2ed710354753742503c09262b9c6d4a",
@@ -163,7 +165,7 @@
     "net-sircl/tests/standin/shm_verbs.c": "3921790d413212dee23f906a2abc897ff2367c27ac910d521174cf8c077b66a2",
     "net-sircl/tests/standin/shm_verbs.h": "53f1b6b16e26f807875bc1020f76764acae3bdcff26356eed6900f169be5bd63",
     "net-sircl/tests/topology_progress_test.c": "f0bcd956edfc4cfa3bfd339f34a7c7f580256da315d6d8b592b0d0a24c52af02",
-    "transport-core/include/sircl_core/core.h": "2758f18ea6a627b90d759669553b8be72e79ca51273ffbf984587f71151d32e9",
+    "transport-core/include/sircl_core/core.h": "07ef70851ac78bedb98f61522cdcb697971f98cfbf36df83899c5215d8537753",
     "transport-core/include/sircl_core/emulation_verbs.h": "4492551757c091045ac75150585a645f4f5682402e8cd4564d5116d31d0de3da",
     "transport-core/include/sircl_core/legacy_proxy_names.h": "94e302cb90785a3394ab3c1ca7cd454fbead8767e0fa7ad3d6e072afcf9db7f3",
     "transport-core/include/sircl_core/shm_verbs.c": "27ac4ea05c5e15185fcf51106895655a9b34a08913232a664448f7fe2db70d15",
@@ -181,7 +183,7 @@
     "transport-core/src/topology.c": "0719f36aa7b5a3b4754c180166ed3d8620a67bf9d285aed3faf92d4fbc9852f4",
     "transport-core/src/verbs_dl.c": "ea38fd0ef71bc215f8d97c4f836179aa9190dc87a34125a4a24a96e23bbc4d84",
     "transport-core/tests/fake_verbs/infiniband/verbs.h": "8c2173547a2169bb455d103b7842463168e75d4350f4434d92ab5dabc353c64c",
-    "transport-core/tests/test_core.c": "af1228e52b14a1da826573e8eb604ca27ffaf603d3aa7f464b00a4b729f0c2c0",
+    "transport-core/tests/test_core.c": "af50eedb132df536ab1a4700b9513d7a0d101ec9d26049a9ae6466c89ceb2218",
     "transport-core/tests/test_emulator_lifetime.c": "9a6b273b84cee7da73ec12eb03759098e11103bb461af02b5af6dd03311c0506",
     "transport-core/tests/test_verbs.c": "ec84a8971e48c2fd098dc06d630733af2a5f21c6cd6e9eaa89dca67a9871c220"
   },
