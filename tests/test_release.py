@@ -77,7 +77,7 @@ class ReleaseTests(unittest.TestCase):
         library = ctypes.CDLL(str(ROOT / "net-sircl/libnccl-net-sircl-emu.so"))
         routes = library.net_sircl_topology_routes
         routes.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_size_t]
-        for name, size in (("pair", 2), ("ring4", 4), ("ring8", 8), ("path4", 4)):
+        for name, size in (("pair", 2), ("ring4", 4), ("ring4-two-hca", 4), ("ring8", 8), ("path4", 4)):
             for position in range(size):
                 output = ctypes.create_string_buffer(4096)
                 self.assertEqual(routes(str(ROOT / f"examples/{name}.topology").encode(), position,

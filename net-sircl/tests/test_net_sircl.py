@@ -334,6 +334,43 @@ class NetSirclTests(unittest.TestCase):
         self.assertEqual(self.routes(pair, 0), {"1": "eth0a/eth0b:0:0"})
         self.assertEqual(self.routes(pair, 1), {"0": "eth1a/eth1b:0:0"})
 
+    def test_topology_single_function_per_port_routes_and_progress(self):
+        ring4 = "hosts a b c d\ncabling ring\nport0 mlx5_0\nport1 mlx5_1\n"
+        self.assertEqual(self.routes(ring4, 0), {
+            "1": "mlx5_0:0:0",
+            "2": "mlx5_0:1:393216",
+            "3": "mlx5_1:0:0",
+        })
+        self.assertEqual(self.routes(ring4, 2), {
+            "0": "mlx5_1:1:393216",
+            "1": "mlx5_1:0:0",
+            "3": "mlx5_0:0:0",
+        })
+        path4 = "hosts a b c d\ncabling path\nport0 mlx5_0\nport1 mlx5_1\nrelay_budget 196608\n"
+        self.assertEqual(self.routes(path4, 0)["3"], "mlx5_0:2:176896")
+        self.assertEqual(self.routes(path4, 3)["0"], "mlx5_1:2:176896")
+        self.assertIn("same number of functions", self.routes("hosts a b\ncabling path\nport0 mlx5_0\n", 0))
+
+        # Run full 4-rank emulated concurrent progress on 1-function ring and path (only emu0,emu1 exposed).
+        exe = Path(self.build.name) / "topology_progress_1func_test"
+        subprocess.run([os.environ.get("CC", "cc"), *FLAGS, *STANDIN_FLAGS,
+                        str(HERE / "tests" / "topology_progress_test.c"), str(STANDIN / "shm_verbs.c"),
+                        *CORE_SOURCES, "-o", str(exe)], check=True)
+        for cabling in ("ring", "path"):
+            with self.subTest(cabling=cabling):
+                topo_file = Path(self.build.name) / f"single_func_{cabling}.topology"
+                topo_file.write_text(f"hosts h0 h1 h2 h3\ncabling {cabling}\nport0 emu0\nport1 emu1\n")
+                fabric = f"/sircl-emu-1func-{os.getpid()}-{cabling}"
+                env = {k: v for k, v in os.environ.items() if not k.startswith("NET_SIRCL_")}
+                env.update(NET_SIRCL_TOPOLOGY=str(topo_file), NET_SIRCL_HCA="emu0,emu1",
+                           SIRCL_EMU_FABRIC=fabric, NET_SIRCL_RELAY_BUDGET="196608")
+                try:
+                    res = subprocess.run([str(exe), "4"], env=env, capture_output=True, text=True, timeout=55)
+                    self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+                    self.assertIn("exact and bounded", res.stdout)
+                finally:
+                    (Path("/dev/shm") / fabric.lstrip("/")).unlink(missing_ok=True)
+
     def test_topology_explicit_cables(self):
         text = "hosts a b c\ncabling explicit\ncable 0.port1 2.port0\ncable 2.port1 1.port0\n"
         routes = self.routes(text, 0)

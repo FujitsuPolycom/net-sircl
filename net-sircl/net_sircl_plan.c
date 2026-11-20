@@ -5,8 +5,9 @@
 #define ROUTE_MODEL_HOSTS 8
 
 int sircl_route_function(const struct sircl_core_topology *t, const char *name) {
+  if (!name || !*name) return -1;
   for (int f = 0; f < ROUTE_FUNCTIONS; ++f)
-    if (!strcmp(t->fn[f / 2][f % 2], name)) return f;
+    if (t->fn[f / 2][f % 2][0] && !strcmp(t->fn[f / 2][f % 2], name)) return f;
   return -1;
 }
 
@@ -19,9 +20,13 @@ int sircl_route_allowances(const struct sircl_core_topology *t, uint32_t budget,
   for (int s = 0; s < t->nhosts; ++s)
     for (int f = 0; f < ROUTE_FUNCTIONS; ++f) caps[s][f] = fallback;
   if (t->nhosts < 2 || t->nhosts > ROUTE_MODEL_HOSTS) return 0;
-  for (int f = 0; f < ROUTE_FUNCTIONS; ++f)
+  int nlanes = t->fn[0][1][0] ? 2 : 1;
+  if ((t->fn[1][1][0] != 0) != (nlanes == 2)) return 0;
+  for (int f = 0; f < ROUTE_FUNCTIONS; ++f) {
+    if (!t->fn[f / 2][f % 2][0]) continue;
     for (int h = 0; h < f; ++h)
-      if (!strcmp(t->fn[f / 2][f % 2], t->fn[h / 2][h % 2])) return 0;
+      if (t->fn[h / 2][h % 2][0] && !strcmp(t->fn[f / 2][f % 2], t->fn[h / 2][h % 2])) return 0;
+  }
 
   int neighbor[ROUTE_MODEL_HOSTS][2], arrival[ROUTE_MODEL_HOSTS][2];
   memset(neighbor, -1, sizeof neighbor);
@@ -41,9 +46,11 @@ int sircl_route_allowances(const struct sircl_core_topology *t, uint32_t budget,
     for (int d = 0; d < t->nhosts; ++d) if (d != s) {
       const char *fn[2], *back[2];
       int relays, reverse_relays;
-      if (sircl_core_topology_route(t, s, d, fn, &relays) < 0) continue;
-      if (sircl_core_topology_route(t, d, s, back, &reverse_relays) != 2 || reverse_relays != relays) return 0;
-      for (int lane = 0; lane < 2; ++lane) {
+      int nl = sircl_core_topology_route(t, s, d, fn, &relays);
+      if (nl < 0) continue;
+      if (nl != nlanes || sircl_core_topology_route(t, d, s, back, &reverse_relays) != nl || reverse_relays != relays)
+        return 0;
+      for (int lane = 0; lane < nl; ++lane) {
         int f = sircl_route_function(t, fn[lane]);
         if (f < 0) return 0;
         int origin = s * ROUTE_FUNCTIONS + f, u = s, port = f / 2;
@@ -89,9 +96,10 @@ int sircl_split_allowances(const struct sircl_core_topology *t, int derived,
   if (!derived) return 0;
   for (int s = 0; s < t->nhosts; ++s)
     for (int f = 0; f < ROUTE_FUNCTIONS; ++f)
-      if (caps[s][f] < 1280) return 0;
+      if (t->fn[f / 2][f % 2][0] && caps[s][f] < 1280) return 0;
   for (int s = 0; s < t->nhosts; ++s)
     for (int f = 0; f < ROUTE_FUNCTIONS; ++f) {
+      if (!t->fn[f / 2][f % 2][0]) continue;
       ack[s][f] = caps[s][f] / 5u / 128u * 128u;
       caps[s][f] = caps[s][f] * 6u / 5u / 64u * 64u;
     }

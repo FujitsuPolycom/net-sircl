@@ -110,7 +110,10 @@ static ncclResult_t route_overrides(void) {
       struct route *r = &g.routes[peer];
       if (!kind) {
         char expected[160];
-        snprintf(expected, sizeof expected, "%s/%s", g.devs[r->dev[0]].name, g.devs[r->dev[1]].name);
+        if (r->ndev == 1)
+          snprintf(expected, sizeof expected, "%s", g.devs[r->dev[0]].name);
+        else
+          snprintf(expected, sizeof expected, "%s/%s", g.devs[r->dev[0]].name, g.devs[r->dev[1]].name);
         if (strcmp(expected, eq + 1)) goto invalid;
       } else {
         if (!eq[1]) goto invalid;
@@ -177,20 +180,23 @@ static int routes_from_topology(const char *path) {
     if (peer == me) continue;
     const char *fn[2];
     int relays = 0;
-    if (sircl_core_topology_route(&t, me, peer, fn, &relays) < 0) continue;
+    int nlanes = sircl_core_topology_route(&t, me, peer, fn, &relays);
+    if (nlanes < 0) continue;
     struct route *r = &g.routes[peer];
     r->ndev = 0;
-    for (int l = 0; l < NET_SIRCL_MAX_LANES; ++l) {
+    for (int l = 0; l < nlanes; ++l) {
       int d = dev_by_name(fn[l]);
       if (d < 0) {
-        WARN("net-sircl: topology lane %s is not exposed; retain both route lanes in NET_SIRCL_HCA", fn[l]);
+        WARN("net-sircl: topology lane %s is not exposed; retain route lanes in NET_SIRCL_HCA", fn[l]);
         return -1;
       }
       r->dev[r->ndev++] = d;
     }
     r->relays = relays;
-    uint32_t a = g.relay_windows[r->dev[0]].cap, b = g.relay_windows[r->dev[1]].cap;
-    r->window = relays > 0 ? (a < b ? a : b) : 0;
+    uint32_t win = g.relay_windows[r->dev[0]].cap;
+    for (int l = 1; l < r->ndev; ++l)
+      if (g.relay_windows[r->dev[l]].cap < win) win = g.relay_windows[r->dev[l]].cap;
+    r->window = relays > 0 ? win : 0;
   }
   return 0;
 }
@@ -214,10 +220,19 @@ int net_sircl_topology_routes(const char *path, int position, char *out, size_t 
   for (int peer = 0; peer < t.nhosts; ++peer) {
     const char *fn[2];
     int relays = 0;
-    if (peer == position || sircl_core_topology_route(&t, position, peer, fn, &relays) < 0) continue;
-    uint32_t a = plan.caps[position][sircl_route_function(&t, fn[0])], b = plan.caps[position][sircl_route_function(&t, fn[1])];
-    int n = snprintf(out + used, len - used, "%d=%s/%s:%d:%u;", peer, fn[0], fn[1], relays,
-                     relays > 0 ? (a < b ? a : b) : 0u);
+    int nlanes = peer == position ? -1 : sircl_core_topology_route(&t, position, peer, fn, &relays);
+    if (nlanes < 0) continue;
+    uint32_t win = plan.caps[position][sircl_route_function(&t, fn[0])];
+    int n;
+    if (nlanes == 1) {
+      n = snprintf(out + used, len - used, "%d=%s:%d:%u;", peer, fn[0], relays,
+                   relays > 0 ? win : 0u);
+    } else {
+      uint32_t b = plan.caps[position][sircl_route_function(&t, fn[1])];
+      if (b < win) win = b;
+      n = snprintf(out + used, len - used, "%d=%s/%s:%d:%u;", peer, fn[0], fn[1], relays,
+                   relays > 0 ? win : 0u);
+    }
     if (n < 0 || (size_t)n >= len - used) return -1;
     used += (size_t)n;
   }

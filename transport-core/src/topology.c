@@ -63,7 +63,7 @@ int sircl_core_topology_parse(const char *path, struct sircl_core_topology *t, c
   FILE *f = fopen(path, "r");
   if (!f) return reject(err, len, "cannot open %s: %s", path, strerror(errno));
   char line[1024], cabling[16] = "";
-  int lineno = 0, rc = 0;
+  int lineno = 0, rc = 0, port_lanes[2] = {NET_SIRCL_MAX_LANES, NET_SIRCL_MAX_LANES};
   while (!rc && fgets(line, sizeof line, f)) {
     ++lineno;
     size_t got = strlen(line);
@@ -110,13 +110,20 @@ int sircl_core_topology_parse(const char *path, struct sircl_core_topology *t, c
       int p = key[4] - '0';
       char *v[NET_SIRCL_MAX_LANES + 1];
       for (int l = 0; l <= NET_SIRCL_MAX_LANES; ++l) v[l] = strtok_r(NULL, BLANK, &save);
-      if (!v[0] || !v[1] || v[2])
-        rc = reject(err, len, "%s:%d: %s requires exactly two device identifiers", path, lineno, key);
-      for (int l = 0; !rc && l < NET_SIRCL_MAX_LANES; ++l) {
-        if (!function_name(v[l]))
-          rc = reject(err, len, "%s:%d: invalid device identifier %s", path, lineno, v[l]);
-        else
-          snprintf(t->fn[p][l], FIELD, "%s", v[l]);
+      if (!v[0] || v[2]) {
+        rc = reject(err, len, "%s:%d: %s requires one or two device identifiers", path, lineno, key);
+      } else {
+        int count = v[1] ? 2 : 1;
+        for (int l = 0; !rc && l < count; ++l) {
+          if (!function_name(v[l]))
+            rc = reject(err, len, "%s:%d: invalid device identifier %s", path, lineno, v[l]);
+          else
+            snprintf(t->fn[p][l], FIELD, "%s", v[l]);
+        }
+        if (!rc) {
+          if (count == 1) t->fn[p][1][0] = '\0';
+          port_lanes[p] = count;
+        }
       }
     } else if (!strcmp(key, "relay_budget")) {
       char *v = strtok_r(NULL, BLANK, &save);
@@ -138,6 +145,8 @@ int sircl_core_topology_parse(const char *path, struct sircl_core_topology *t, c
   if (!rc && ferror(f)) rc = reject(err, len, "cannot read %s", path);
   fclose(f);
   if (rc) return rc;
+  if (port_lanes[0] != port_lanes[1])
+    return reject(err, len, "%s: port0 and port1 must name the same number of functions (1 or 2)", path);
   if (t->nhosts < 2) return reject(err, len, "%s: `hosts` names fewer than two hosts", path);
   for (int a = 0; a < t->nhosts; ++a)
     for (int b = a + 1; b < t->nhosts; ++b)
@@ -219,6 +228,8 @@ static int topo_cross(const struct sircl_core_topology *t, int host, int port, i
  * path. -1 when the peer is unreachable. */
 int sircl_core_topology_route(const struct sircl_core_topology *t, int me, int peer, const char **fn, int *relays) {
   if (!t || !fn || !relays || me < 0 || peer < 0 || me >= t->nhosts || peer >= t->nhosts) return -1;
+  int nlanes = t->fn[0][1][0] ? 2 : 1;
+  if ((t->fn[1][1][0] != 0) != (nlanes == 2)) return -1;
   int from_me[MAX_POSITIONS], from_peer[MAX_POSITIONS];
   topo_distances(t, me, from_me);
   topo_distances(t, peer, from_peer);
@@ -236,8 +247,8 @@ int sircl_core_topology_route(const struct sircl_core_topology *t, int me, int p
   if (port_ok[0] != port_ok[1]) {
     int p = port_ok[0] ? 0 : 1;
     fn[0] = t->fn[p][0];
-    fn[1] = t->fn[p][1];
-    return 2;
+    fn[1] = nlanes == 2 ? t->fn[p][1] : NULL;
+    return nlanes;
   }
   /* Both ports start a shortest path. Path A leaves the lower of the two positions through its port 0. The
    * higher position sends lane 0 out of the port on which path A arrives there: port 1 in ring cabling, and
@@ -256,6 +267,6 @@ int sircl_core_topology_route(const struct sircl_core_topology *t, int me, int p
     if (at != me) return -1;
   }
   fn[0] = t->fn[a_port][0];
-  fn[1] = t->fn[1 - a_port][1];
-  return 2;
+  fn[1] = nlanes == 2 ? t->fn[1 - a_port][1] : NULL;
+  return nlanes;
 }
