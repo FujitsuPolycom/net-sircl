@@ -128,7 +128,22 @@ not predictions for this matched-control procedure.
 
 ## Unmeasured conditions
 
-No ring-of-four plugin traffic measurement or measurement with relaxed ordering disabled.
+A ring of four also ran with the 0.1.0 transport: every nccl-tests line passed
+at 0.99–1.01 of stock NCCL's bus bandwidth (all-reduce 23.46 against 23.28 GB/s
+at 256 MiB), as the [release notes](release-0.1.0.md) state. Its per-collective
+values are not tabulated above, no record of it is retained here, and it has
+not been rerun with a later build.
+
+Two points are recorded inconsistently and no retained record settles them:
+
+- The release notes report a pair comparison of `NET_SIRCL_RELAXED_ORDERING=0`
+  against `=1` (ratios 0.98–1.02). No conditions or values for it are kept
+  here, so treat relaxed ordering disabled as unmeasured.
+- The release notes say the path-of-four result used fabric-tool's path table;
+  the conditions above say the relays were configured with a different
+  installer from the SparkRing project. Which installer produced the 17.67 GB/s
+  run is not established. Either way the result does not qualify fabric-tool.
+
 No serving performance or combined multi-sender relay qualification. CPU tests
 and shared-memory emulation do not establish physical forwarding, real NIC
 loss recovery, reboot restoration or NIC performance. The separate fabric-tool

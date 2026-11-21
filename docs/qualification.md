@@ -11,6 +11,18 @@ restoration and safe emulation selection. The
 revision `ddc39fa07cd57010769a77094d0a6aad1efb9fbb`, compiled-library hashes,
 matched controls, results and limitations.
 
+The revisions those records name are tagged, so they stay reachable:
+`validation/2026-10-23-transport` (`ddc39fa`), `validation/2026-10-23-resource-ownership`
+(`cf2301c`), `validation/2026-10-23-recovery` (`748142f`) and
+`validation/2026-10-23-installer-coordination` (`5c76ef4`, which is later than
+the revision that ran on hardware).
+
+**Release 0.1.3 is not covered by any row below.** Its plugin, topology parser
+and fabric-tool differ from the tagged revisions (see the
+[0.1.3 release notes](../RELEASE_NOTES-0.1.3.md)) and have been tested on CPU
+only. Every **Qualified** entry applies to the revision and artifact its record
+names, not to 0.1.3.
+
 | Component | Conditions and measurement | Status and conclusion |
 |---|---|---|
 | Physical RDMA plugin | Artifacts identified by the two validation records; NCCL 2.32.3; four collectives, eager and graphs, 8 KiB–256 MiB | **Qualified** for the recorded topologies and artifacts. Transport controls total 72 sweeps; recovery checks add 16 four-host-path sweeps. Zero reported correctness errors or monitored error/drop growth. No throughput guarantee |

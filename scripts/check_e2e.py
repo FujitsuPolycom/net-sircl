@@ -55,7 +55,8 @@ def main():
         for rank in range(2):
             log = (output / f"rank{rank}.log").read_text()
             release = (ROOT / "net-sircl/VERSION").read_text().strip()
-            if f"net-sircl {release} (wire version 6)" not in log or "transport-core 0.1.1 ABI 1 source " not in log:
+            core = (ROOT / "transport-core/VERSION").read_text().strip()
+            if f"net-sircl {release} (wire version 6)" not in log or f"transport-core {core} ABI 1 source " not in log:
                 raise RuntimeError("rank log lacks the current plugin or transport-core identity; rebuild with make emu")
     return 0
 
