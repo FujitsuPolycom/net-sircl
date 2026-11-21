@@ -125,3 +125,66 @@ def test_load_preserves_default_bindings(tmp_path):
     ring = topology.load(path)
     assert ring.bindings.devices == ring.functions
     assert model.DEFAULT_BINDINGS.roles == model.DEFAULT_ROLES
+
+
+def test_single_function_per_port_ring_and_path_plan_and_facts():
+    from fabric_tool import facts as facts_mod, ops, plan as plan_mod
+
+    ring = topology.parse("hosts s0 s1 s2 s3\ncabling ring\nport0 mlx5_0\nport1 mlx5_1\n")
+    assert ring.lanes == 1
+    assert ring.functions == ("mlx5_0", "mlx5_1")
+    assert ring.bindings.lanes == 1
+    assert ring.bindings.devices == ("mlx5_0", "mlx5_1")
+    assert ring.group.relay_egress == "same"
+
+    sym = plan_mod.Facts.symbolic_for(ring.hosts, bindings=ring.bindings)
+    ring_plan = plan_mod.build_plan(ring.group, sym)
+    assert ring_plan.sircl.lanes == 1
+    assert ring_plan.sircl.route_text(0) == "1=mlx5_0,2=mlx5_0,3=mlx5_1"
+    assert ring_plan.sircl.route_text(2) == "0=mlx5_1,1=mlx5_1,3=mlx5_0"
+    assert len(ring_plan.host(0).routes) == 2
+    assert [r.lanes for r in ring_plan.host(0).routes if r.lanes] == [("rank 0->2 lane 0",)]
+    assert len(ring_plan.host(1).filters) == 2
+
+    # Facts binding + cable subnet check with /30 per-cable subnets
+    doc = {
+        "schema": facts_mod.FACTS_SCHEMA,
+        "hosts": [
+            {"name": "s0", "position": 0, "functions": {
+                "mlx5_0": {"netdev": "eth0", "mac": "00:11:22:33:44:00", "address": "198.51.100.1/30"},
+                "mlx5_1": {"netdev": "eth1", "mac": "00:11:22:33:44:01", "address": "198.51.100.14/30"},
+            }},
+            {"name": "s1", "position": 1, "functions": {
+                "mlx5_0": {"netdev": "eth0", "mac": "00:11:22:33:44:10", "address": "198.51.100.5/30"},
+                "mlx5_1": {"netdev": "eth1", "mac": "00:11:22:33:44:11", "address": "198.51.100.2/30"},
+            }},
+            {"name": "s2", "position": 2, "functions": {
+                "mlx5_0": {"netdev": "eth0", "mac": "00:11:22:33:44:20", "address": "198.51.100.9/30"},
+                "mlx5_1": {"netdev": "eth1", "mac": "00:11:22:33:44:21", "address": "198.51.100.6/30"},
+            }},
+            {"name": "s3", "position": 3, "functions": {
+                "mlx5_0": {"netdev": "eth0", "mac": "00:11:22:33:44:30", "address": "198.51.100.13/30"},
+                "mlx5_1": {"netdev": "eth1", "mac": "00:11:22:33:44:31", "address": "198.51.100.10/30"},
+            }},
+        ],
+    }
+    bound = facts_mod.bind(doc, ring)
+    assert bound.bindings.lanes == 1
+    assert ops.cable_problems(ring.group, bound) == []
+    concrete = plan_mod.build_plan(ring.group, bound)
+    assert concrete.host(0).routes[0].destination == "198.51.100.6"
+
+    # Single-function path automatically uses same-function egress (no sibling exists)
+    path = topology.parse("hosts s0 s1 s2 s3\ncabling path\nport0 mlx5_0\nport1 mlx5_1\n")
+    assert path.group.relay_egress == "same"
+    path_plan = plan_mod.build_plan(path.group, plan_mod.Facts.symbolic_for(path.hosts, bindings=path.bindings))
+    assert path_plan.sircl.route_text(0) == "1=mlx5_0,2=mlx5_0,3=mlx5_0"
+    assert path_plan.sircl.route_text(3) == "0=mlx5_1,1=mlx5_1,2=mlx5_1"
+
+    with pytest.raises(model.FabricError, match="same number of functions"):
+        topology.parse("hosts a b\ncabling path\nport0 mlx5_0\n")
+    with pytest.raises(model.FabricError, match="same number of functions"):
+        topology.parse("hosts a b\ncabling path\nport0 mlx5_0\nport1 mlx5_1 mlx5_2\n")
+    with pytest.raises(model.FabricError, match="sibling relay egress"):
+        plan_mod.build_group_plan(path.group, sym, relay_egress="sibling")
+

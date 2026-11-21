@@ -127,7 +127,7 @@ def cable_problems(group: GroupSpec, facts: Facts) -> list[str]:
     the cabling."""
     problems = []
     for cable in group.layout.fabric.cables:
-        for secondary in (False, True):
+        for secondary in facts.bindings.classes:
             here = facts.port(cable.a, facts.bindings.role_at(cable.a_port, secondary).netdev)
             there = facts.port(cable.b, facts.bindings.role_at(cable.b_port, secondary).netdev)
             networks = (here.network(), there.network())
@@ -146,7 +146,7 @@ def unchecked_cables(group: GroupSpec, facts: Facts) -> list[str]:
     length, so its subnet is unknown. Reported, so a skipped cabling check is never a silent pass."""
     skipped = []
     for cable in group.layout.fabric.cables:
-        for secondary in (False, True):
+        for secondary in facts.bindings.classes:
             here = facts.port(cable.a, facts.bindings.role_at(cable.a_port, secondary).netdev)
             there = facts.port(cable.b, facts.bindings.role_at(cable.b_port, secondary).netdev)
             if here.network() is None or there.network() is None:
@@ -198,7 +198,8 @@ def evaluate(topology: Topology, states: dict[int, HostState], file_facts: Facts
     group = topology.group
     compared = sorted(set(positions if positions is not None else group.order))
     outcome = Outcome(topology, group, mode, None)
-    problems = model.isolation_problems([model.derive_routes(group.layout, 2, bindings=file_facts.bindings if file_facts else topology.bindings)])
+    initial_bindings = file_facts.bindings if file_facts else topology.bindings
+    problems = model.isolation_problems([model.derive_routes(group.layout, initial_bindings.lanes, bindings=initial_bindings)])
     if problems:
         raise FabricError("isolation: " + "; ".join(problems))
     read_facts = facts_from(states, bindings=file_facts.bindings if file_facts else topology.bindings)

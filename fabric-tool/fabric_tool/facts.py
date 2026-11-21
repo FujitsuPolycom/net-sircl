@@ -150,9 +150,15 @@ def bind(document: dict[str, object], topology: Topology) -> Facts:
             raise FabricError(f"the hosts name function {device} by different network devices "
                               f"{sorted(named)}; every host must name it alike")
         netdevs[device] = named.pop()
-    roles = tuple(model.Role(("cw_primary", "cw_secondary", "ccw_primary", "ccw_secondary")[index],
-                             device, netdevs[device], index // 2, bool(index % 2))
-                  for index, device in enumerate(topology.functions))
+    if topology.lanes == 1:
+        roles = (
+            model.Role("cw_primary", topology.functions[0], netdevs[topology.functions[0]], 0, False),
+            model.Role("ccw_primary", topology.functions[1], netdevs[topology.functions[1]], 1, False),
+        )
+    else:
+        roles = tuple(model.Role(("cw_primary", "cw_secondary", "ccw_primary", "ccw_secondary")[index],
+                                 device, netdevs[device], index // 2, bool(index % 2))
+                      for index, device in enumerate(topology.functions))
     bindings = model.FabricBindings(roles)
     hosts = []
     for position, name in enumerate(topology.hosts):

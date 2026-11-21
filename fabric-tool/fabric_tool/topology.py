@@ -135,6 +135,10 @@ class Topology:
     budget: int
 
     @property
+    def lanes(self) -> int:
+        return len(self.functions) // 2
+
+    @property
     def bindings(self) -> model.FabricBindings:
         return model.FabricBindings(_roles_of_functions(self.functions))
 
@@ -169,12 +173,17 @@ class Topology:
 
 
 def _roles_of_functions(functions: tuple[str, ...]) -> tuple[Role, ...]:
-    """The four roles of a topology's function names, with the DGX OS network devices as defaults.
+    """The two or four roles of a topology's function names, with the DGX OS network devices as defaults.
 
     The facts file (or a host read) binds each function to its network
     device; until then the roles carry the default devices, which the fact
     checks replace when a host names others.
     """
+    if len(functions) == 2:
+        return (
+            Role("cw_primary", functions[0], DEFAULT_NETDEVS[0], 0, False),
+            Role("ccw_primary", functions[1], DEFAULT_NETDEVS[2], 1, False),
+        )
     roles = []
     for index, device in enumerate(functions):
         port, secondary = divmod(index, 2)
@@ -187,7 +196,7 @@ def parse(text: str, *, path: str = "<topology>") -> Topology:
     """Parse topology file text; FabricError names the line and the rule."""
     hosts: list[str] = []
     cables: list[Cable] = []
-    functions: list[str] = list(DEFAULT_FUNCTIONS)
+    port_functions: list[list[str]] = [list(DEFAULT_FUNCTIONS[:2]), list(DEFAULT_FUNCTIONS[2:])]
     budget = DEFAULT_BUDGET
     cabling = ""
     for lineno, raw in enumerate(text.splitlines(), start=1):
@@ -210,11 +219,10 @@ def parse(text: str, *, path: str = "<topology>") -> Topology:
             except FabricError:
                 raise FabricError(f"{path}:{lineno}: a cable is `cable <i>.port<0|1> <j>.port<0|1>`") from None
         elif key in ("port0", "port1"):
-            if len(rest) != 2:
-                raise FabricError(f"{path}:{lineno}: {key} requires exactly two device identifiers")
+            if len(rest) not in (1, 2):
+                raise FabricError(f"{path}:{lineno}: {key} requires one or two device identifiers")
             port = int(key[-1])
-            for lane, name in enumerate(rest[:2]):
-                functions[2 * port + lane] = name
+            port_functions[port] = list(rest)
         elif key == "relay_budget":
             if len(rest) != 1 or not _DECIMAL.fullmatch(rest[0]) or int(rest[0]) == 0:
                 raise FabricError(f"{path}:{lineno}: relay_budget is a positive byte count")
@@ -240,7 +248,10 @@ def parse(text: str, *, path: str = "<topology>") -> Topology:
         last = len(hosts) if cabling == "ring" and len(hosts) > 2 else len(hosts) - 1
         for i in range(last):
             cables.append(Cable(i, 0, (i + 1) % len(hosts), 1))
-    if len(set(functions)) != 4:
+    if len(port_functions[0]) != len(port_functions[1]):
+        raise FabricError(f"{path}: port0 and port1 must name the same number of functions (1 or 2)")
+    functions = port_functions[0] + port_functions[1]
+    if len(set(functions)) != len(functions):
         raise FabricError(f"{path}: port0 and port1 name one function twice")
     try:
         fabric = Fabric(tuple(cables))
@@ -276,7 +287,7 @@ def _group_of(topology: Topology) -> GroupSpec:
     """The one group of a topology: whole cycle or path, with the topology relay-egress default."""
     fabric = Fabric(topology.cables)
     layout = Layout(fabric, tuple(range(topology.size)))
-    egress = "same" if fabric.kind == "cycle" else "sibling"
+    egress = "same" if fabric.kind == "cycle" or topology.lanes == 1 else "sibling"
     return GroupSpec(layout, egress, topology.layout_name, topology.bindings)
 
 

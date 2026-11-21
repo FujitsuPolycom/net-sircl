@@ -1,0 +1,7 @@
+net-sircl-topology
+# Four hosts in a ring with one RDMA function per physical port (two HCAs per host).
+# Port 0 of host i is cabled to port 1 of host (i + 1) mod 4.
+hosts spark1 spark2 spark3 spark4
+cabling ring
+port0 rocep1s0f0
+port1 rocep1s0f1

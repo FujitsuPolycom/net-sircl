@@ -97,8 +97,10 @@ class PlanningTests(unittest.TestCase):
                 ("hosts a b\ncabling explicit\ncable -0.port0 1.port1\n", "a cable is"),   # a sign
                 ("hosts a b\ncabling explicit\ncable 0.port0 1.port1 2.port0\n", "a cable is"),
                 ("hosts a b\ncabling explicit\ncable 0.port0 7.port1\n", "outside 0-1"),
-                ("hosts a b\ncabling path\nport0 only_one\n", "requires exactly two"),
-                ("hosts a b\ncabling path\nport1 a b c\n", "requires exactly two"),
+                ("hosts a b\ncabling path\nport0 only_one\n", "same number of functions"),
+                ("hosts a b\ncabling path\nport0 only_one\nport1 a b\n", "same number of functions"),
+                ("hosts a b\ncabling path\nport0\n", "requires one or two"),
+                ("hosts a b\ncabling path\nport1 a b c\n", "requires one or two"),
                 ("hosts a b\ncabling path\nport0 ok bad/name\n", "invalid device identifier"),
                 ("hosts a b\ncabling path\nport0 ok " + "f" * 64 + "\n", "invalid device identifier"),
                 (f"hosts a {long_name}\ncabling path\n", "longer than 63 characters"),   # was silently cut short
@@ -126,6 +128,8 @@ class PlanningTests(unittest.TestCase):
                 "hosts a b c\ncabling explicit\ncable 2.port0 0.port1\ncable 1.port1 0.port0\n",
                 "hosts a b\ncabling path\nport0 emu0 emu1\nport1 emu0 emu1\n",   # aliased names: emulation
                 "hosts a b\ncabling path\nport0 mlx5_0 mlx5-1.a:b\nport1 _x y\n",
+                "hosts a b c d\ncabling ring\nport0 mlx5_0\nport1 mlx5_1\n",
+                "hosts a b c\ncabling path\nport0 emu0\nport1 emu0\n",
                 f"hosts a {sixty_three}\ncabling path\n",
                 f"hosts {many}\ncabling ring\n",
                 "hosts a b\ncabling path\n# " + "x" * 1019,                    # a full last line without a line end

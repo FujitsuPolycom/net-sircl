@@ -80,6 +80,19 @@ def valid_corpus():
         yield f"ring {n}, last host turned", explicit(n, turned(ring(n), {n - 1}))
     yield "custom functions", "hosts a b c d\ncabling ring\nport0 mlx5_0 mlx5_1\nport1 mlx5_2 mlx5_3\n"
     yield "one port renamed", "hosts a b c\ncabling path\nport1 left.a right-b\n"
+    yield "single function ring4", "hosts a b c d\ncabling ring\nport0 mlx5_0\nport1 mlx5_1\n"
+    yield "single function path4", "hosts a b c d\ncabling path\nport0 mlx5_0\nport1 mlx5_1\n"
+    yield "single function explicit turned ring", (
+        "hosts a b c d\ncabling explicit\n"
+        "cable 0.port0 1.port1\ncable 1.port0 2.port0\n"
+        "cable 2.port1 3.port1\ncable 3.port0 0.port1\n"
+        "port0 rocep1s0f0\nport1 rocep1s0f1\n"
+    )
+    yield "single function two-cable pair", (
+        "hosts a b\ncabling explicit\n"
+        "cable 0.port0 1.port1\ncable 1.port0 0.port1\n"
+        "port0 mlx5_0\nport1 mlx5_1\n"
+    )
     yield "budget", "hosts a b c d\ncabling path\nrelay_budget 196608\n"
     yield "comments and spacing", ("# leading comment\nnet-sircl-topology\n\n  hosts  a\tb   c # trailing\n"
                                    "\tcabling\tring\r\nrelay_budget 65536 # bytes\n")
@@ -112,7 +125,9 @@ def invalid_corpus():
     yield "cable with three ends", "hosts a b c\ncabling explicit\ncable 0.port0 1.port1 2.port0\n"
     yield "cable joined by a dash", "hosts a b\ncabling explicit\ncable 0.port0-1.port1\n"
     yield "ring plus a cable on a used port", "hosts a b c\ncabling ring\ncable 0.port0 2.port1\n"
-    yield "port line with one name", "hosts a b\ncabling path\nport0 only\n"
+    yield "port0 one name with default port1", "hosts a b\ncabling path\nport0 only\n"
+    yield "mismatched port0 and port1 counts", "hosts a b\ncabling path\nport0 a\nport1 b c\n"
+    yield "port line with no names", "hosts a b\ncabling path\nport0\n"
     yield "port line with three names", "hosts a b\ncabling path\nport1 a b c\n"
     yield "function with a slash", "hosts a b\ncabling path\nport0 ok bad/name\n"
     yield "function too long", f"hosts a b\ncabling path\nport0 ok {'f' * 64}\n"
@@ -175,8 +190,11 @@ class TopologyConformance(unittest.TestCase):
                 self.assertIsNotNone(c, f"the plugin refuses it: {c_error}")
                 self.assertIsNotNone(py, f"fabric-tool refuses it: {py_error}")
                 self.assertEqual([c.host[i].value.decode() for i in range(c.nhosts)], list(py.hosts))
-                self.assertEqual([c.fn[p][lane].value.decode() for p in (0, 1) for lane in (0, 1)],
-                                 list(py.functions))
+                c_fns = [c.fn[p][lane].value.decode() for p in (0, 1) for lane in range(py.lanes)]
+                self.assertEqual(c_fns, list(py.functions))
+                if py.lanes == 1:
+                    self.assertEqual(c.fn[0][1].value, b"")
+                    self.assertEqual(c.fn[1][1].value, b"")
                 self.assertEqual(c.budget, py.budget)
                 c_cables = {frozenset({(c.cable[i].a, c.cable[i].pa), (c.cable[i].b, c.cable[i].pb)})
                             for i in range(c.ncables)}
@@ -187,10 +205,10 @@ class TopologyConformance(unittest.TestCase):
                 for a, b in itertools.permutations(range(c.nhosts), 2):
                     names = (ctypes.c_char_p * 2)()
                     relays = ctypes.c_int(-1)
-                    self.assertEqual(self.lib.sircl_core_topology_route(ctypes.byref(c), a, b, names,
-                                                                        ctypes.byref(relays)), 2, (a, b))
-                    lanes = model.derive_lanes(fabric, a, b, 2, bindings=py.bindings)
-                    self.assertEqual([names[0].decode(), names[1].decode()],
+                    nlanes = self.lib.sircl_core_topology_route(ctypes.byref(c), a, b, names, ctypes.byref(relays))
+                    self.assertEqual(nlanes, py.lanes, (a, b))
+                    lanes = model.derive_lanes(fabric, a, b, py.lanes, bindings=py.bindings)
+                    self.assertEqual([names[i].decode() for i in range(nlanes)],
                                      [lane.local.device for lane in lanes], (a, b))
                     self.assertEqual({relays.value}, {lane.hops - 1 for lane in lanes}, (a, b))
                 count += 1
@@ -203,7 +221,8 @@ class TopologyConformance(unittest.TestCase):
             c, _ = self.plugin(text)
             if c is None:
                 continue
-            port_of = {c.fn[p][lane].value: (p, lane) for p in (0, 1) for lane in (0, 1)}
+            nlanes = 2 if c.fn[0][1].value else 1
+            port_of = {c.fn[p][lane].value: (p, lane) for p in (0, 1) for lane in range(nlanes)}
             far = {}
             for i in range(c.ncables):
                 cable = c.cable[i]
@@ -213,14 +232,14 @@ class TopologyConformance(unittest.TestCase):
             def lanes(a, b):
                 names = (ctypes.c_char_p * 2)()
                 relays = ctypes.c_int(-1)
-                self.lib.sircl_core_topology_route(ctypes.byref(c), a, b, names, ctypes.byref(relays))
-                return [port_of[names[0]], port_of[names[1]]], relays.value
+                got = self.lib.sircl_core_topology_route(ctypes.byref(c), a, b, names, ctypes.byref(relays))
+                return [port_of[names[i]] for i in range(got)], relays.value
 
             with self.subTest(case=name):
                 for a, b in itertools.permutations(range(c.nhosts), 2):
                     forward, relays = lanes(a, b)
                     backward, _ = lanes(b, a)
-                    for lane in (0, 1):
+                    for lane in range(nlanes):
                         self.assertEqual(forward[lane][1], lane, (a, b))
                         here, out = a, forward[lane][0]
                         for _ in range(relays + 1):

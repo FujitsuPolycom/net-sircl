@@ -452,6 +452,8 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
     """The relay plan of one group (module docstring), checked by :func:`trace` on every origin route."""
     if relay_egress not in ("same", "sibling"):
         raise FabricError(f"relay egress must be same or sibling, got {relay_egress!r}")
+    if facts.bindings.lanes == 1 and relay_egress == "sibling":
+        raise FabricError("sibling relay egress requires two functions per port")
     if not 0 <= max_relays <= MAX_TAG:
         raise FabricError(f"the relay limit must be between 0 and {MAX_TAG} (one tag per relay count)")
     layout = group.layout
@@ -470,9 +472,9 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
                         f"group {group.label}: host {target} is {len(path)} cables from host {origin}, "
                         f"{len(path) - 1} relays; the configured limit is {max_relays} ("
                         "--max-relays raises it, research-only)")
-                for secondary in (False, True):
+                for secondary in facts.bindings.classes:
                     _carry(path, secondary, facts, relay_egress, routes_at, filters_at, group.label)
-    sircl = model.derive_routes(layout, 2, bindings=facts.bindings)
+    sircl = model.derive_routes(layout, facts.bindings.lanes, bindings=facts.bindings)
     lanes_of: dict[tuple[int, str], list[str]] = {}
     for rank, peers in enumerate(sircl.ranks):
         origin = layout.positions[rank]
@@ -523,7 +525,7 @@ def build_group_plan(group: GroupSpec, facts: Facts, *, relay_egress: str,
 
 def build_plan(group: GroupSpec, facts: Facts, *, max_relays: int = model.DEFAULT_MAX_RELAYS) -> GroupPlan:
     """The plan of a topology's group, checked for isolation."""
-    problems = model.isolation_problems([model.derive_routes(group.layout, 2, bindings=facts.bindings)])
+    problems = model.isolation_problems([model.derive_routes(group.layout, facts.bindings.lanes, bindings=facts.bindings)])
     plan = build_group_plan(group, facts, relay_egress=group.relay_egress, max_relays=max_relays)
     problems += isolation_problems([plan])
     if problems:

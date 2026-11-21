@@ -65,21 +65,30 @@ DEFAULT_ROLES = (
 
 @dataclasses.dataclass(frozen=True)
 class FabricBindings:
-    """Four validated RDMA functions and their Ethernet interfaces for one operation."""
+    """Two or four validated RDMA functions and their Ethernet interfaces for one operation."""
 
     roles: tuple[Role, ...] = DEFAULT_ROLES
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "roles", tuple(self.roles))
-        if len(self.roles) != 4:
-            raise FabricError("a role table holds four functions")
+        if len(self.roles) not in (2, 4):
+            raise FabricError("a role table holds two or four functions")
         for role in self.roles:
             device_name(role.device)
             device_name(role.netdev)
-        if len(set(self.devices)) != 4 or len(set(self.netdevs)) != 4:
+        if len(set(self.devices)) != len(self.roles) or len(set(self.netdevs)) != len(self.roles):
             raise FabricError("a role table names one device or interface for two functions")
-        if sorted((r.port, r.secondary) for r in self.roles) != [(0, False), (0, True), (1, False), (1, True)]:
-            raise FabricError("a role table needs both function classes of each port")
+        slots = sorted((r.port, r.secondary) for r in self.roles)
+        if slots not in ([(0, False), (1, False)], [(0, False), (0, True), (1, False), (1, True)]):
+            raise FabricError("a role table needs one or both function classes of each port")
+
+    @property
+    def lanes(self) -> int:
+        return len(self.roles) // 2
+
+    @property
+    def classes(self) -> tuple[bool, ...]:
+        return (False, True) if self.lanes == 2 else (False,)
 
     @property
     def devices(self) -> tuple[str, ...]:

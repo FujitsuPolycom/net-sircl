@@ -15,24 +15,26 @@ cabling ring
 | `hosts <name> ...` | host names in position order, 2 to 64 of them, each at most 63 characters; several `hosts` lines append; a host finds its own position by its host name (`NET_SIRCL_POSITION` overrides) |
 | `cabling ring` / `path` / `explicit` | required. `ring`: host i's port 0 is cabled to host i+1's port 1, and the last host to the first; `path`: the same without the closing cable; `explicit`: only `cable` lines. With two hosts `ring` and `path` both mean the one cable `0.port0`–`1.port1` |
 | `cable <i>.port<p> <j>.port<q>` | one cable (repeatable); positions are plain decimal numbers and ports are 0 or 1 |
-| `port0 <fn> <fn>`, `port1 <fn> <fn>` | the two RDMA functions of each port, lane order (default `rocep1s0f0 roceP2p1s0f0` and `rocep1s0f1 roceP2p1s0f1`, the DGX OS names); letters, digits and `_.:-`, at most 63 characters |
+| `port0 <fn> [<fn>]`, `port1 <fn> [<fn>]` | one or two RDMA functions per port in lane order (both ports must have the same count; default two functions per port: `rocep1s0f0 roceP2p1s0f0` and `rocep1s0f1 roceP2p1s0f1`); letters, digits and `_.:-`, at most 63 characters |
 | `relay_budget <bytes>` | directional budget ceiling, 65536–393216 bytes; default ceiling 393216, further limited by `NET_SIRCL_RELAY_BUDGET` |
 
 A topology file is required, including for a direct pair. The plugin derives the shortest cabled path,
-the local functions of its two lanes, the relays on the way and the source allowance. Each physical port
-must have at most one cable; host names must be unique. Expose both functions required by each route. Where two directions are equally short (the opposite host of an
-even ring, or a pair joined by two cables), lane 0 takes the direction that leaves the lower position through
-its port 0 and lane 1 the other, at both ends, whichever way round `explicit` cabling connects the hosts
-between; the standalone route and queue-model tests verify it. A pair joined by two cables is written with
-`cabling explicit` and two `cable` lines.
+the local functions of its one or two lanes, the relays on the way and the source allowance. Each physical port
+must have at most one cable; host names must be unique. Expose the functions required by each route. Where two
+directions are equally short (the opposite host of an even ring, or a pair joined by two cables), lane 0 takes
+the direction that leaves the lower position through its port 0 and (in two-function topologies) lane 1 takes
+the other, at both ends, whichever way round `explicit` cabling connects the hosts between; the standalone route
+and queue-model tests verify it. A pair joined by two cables is written with `cabling explicit` and two `cable`
+lines. A two-HCA ring or path (one RDMA function per physical port) sets one name on both `port0` and `port1`
+(see `examples/ring4-two-hca.topology`).
 
 The file is refused, with the line and the rule, rather than interpreted loosely: an unknown key, a missing
-`cabling` line, extra words after a key, a `port0`/`port1` line without exactly two names, a name that is too
-long, a line over 1022 characters, a host that no cable reaches, or cables that do not join every host into
-one path or one cycle. `fabric-tool` reads the same file by the same rules, and a shared test holds the two
-parsers to the same cables and lanes. One difference is deliberate: the plugin accepts the same function name
-for both ports (the emulation tests use it, and relay admission then keeps the aggregate model), while
-`fabric-tool` requires four distinct functions.
+`cabling` line, extra words after a key, a `port0`/`port1` line with zero or more than two names, mismatched
+function counts between `port0` and `port1`, a name that is too long, a line over 1022 characters, a host that
+no cable reaches, or cables that do not join every host into one path or one cycle. `fabric-tool` reads the same
+file by the same rules, and a shared test holds the two parsers to the same cables and lanes. One difference is
+deliberate: the plugin accepts the same function name for both ports (the emulation tests use it, and relay
+admission then keeps the aggregate model), while `fabric-tool` requires distinct functions across both ports.
 
 The NCCL ranks may be a subset of the hosts: a path of three Sparks inside a ring of four lists all four hosts,
 and the fourth relays.
@@ -43,7 +45,7 @@ and the fourth relays.
 |---|---|---|
 | `NET_SIRCL_TOPOLOGY` | required | topology shared by all hosts, including relay-only hosts |
 | `NET_SIRCL_POSITION` | from the topology file's host names | this process's position |
-| `NET_SIRCL_ROUTES` | unset | optional `<position>=<function>/<function>,...`; must exactly match topology lanes |
+| `NET_SIRCL_ROUTES` | unset | optional `<position>=<function>` (one-function ports) or `<position>=<function>/<function>,...` (two-function ports); must exactly match topology lanes |
 | `NET_SIRCL_WINDOWS` | unset | `<position>=<bytes>,...`; direct peers: optional per-function payload cap; relayed peers: can only lower the shared source allowance; 0 is rejected for relayed peers |
 | `NET_SIRCL_HCA` | every active RoCE function | comma list of functions to expose |
 | `NET_SIRCL_GID_INDEX` | the function's RoCE v2 IPv4 GID | GID index, 0–255 |
